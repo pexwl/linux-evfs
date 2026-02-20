@@ -3,14 +3,14 @@ CFLAGS = -g
 
 .PHONY: all clean
 
-all: test
+all: test-hello
 
-test: test.o
-	${CC} -o test ${CFLAGS} test.o
+test-hello: test-hello.o
+	$(CC) -o $@ $(CFLAGS) $^
 
-test.o: test.c
-	${CC} -c ${CFLAGS} test.c
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -rf test test.o
+	rm -rf *.o test-hello
 

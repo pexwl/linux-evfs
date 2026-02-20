@@ -1618,12 +1618,8 @@ resizefs_out:
 		return ext4_ioctl_getuuid(EXT4_SB(sb), (void __user *)arg);
 	case EXT4_IOC_SETFSUUID:
 		return ext4_ioctl_setuuid(filp, (const void __user *)arg);
-	case EXT4_IOC_EVFS_HELLO:
-		return evfs_hello();
-	case EXT4_IOC_EVFS_BLK_ALLOC:
-		return evfs_journal_block_alloc(inode, sb, (ext4_fsblk_t) arg);
 	default:
-		return -ENOTTY;
+		return ext4_evfs_entry(cmd, inode, sb, arg);
 	}
 }
 
