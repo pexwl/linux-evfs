@@ -15,18 +15,22 @@ fi
 
 make clean
 make
-echo "Running ./test-hello $TEVFS_MOUNTPT"
-./test-hello $TEVFS_MOUNTPT
-
-sleep 1 # add some delay to wait for printk buffer flushed
-
-if dmesg | grep "bad apple" > /dev/null; then
-    echo "OK"
-else
-    echo "Failed"
-fi
+echo "running ./test-balloc $TEVFS_MOUNTPT"
+./test-balloc $TEVFS_MOUNTPT
 
 if ! sudo -E ./test-img-umount.sh; then
     exit 1
+fi
+
+sudo sync # sync manually
+
+# skip fsck because we have a block not pointed to by any inode
+res=$(sudo -E debugfs -n -R "testb 2048" $TEVFS_IMAGEDIR)
+echo $res
+
+if echo $res | grep "marked in use" > /dev/null; then
+    echo OK
+else
+    echo Failed
 fi
 rm $TEVFS_IMAGEDIR

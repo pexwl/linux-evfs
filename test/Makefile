@@ -3,14 +3,16 @@ CFLAGS = -g
 
 .PHONY: all clean
 
-all: test-hello
+TESTS = test-hello test-ialloc test-balloc
 
-test-hello: test-hello.o
+all: $(TESTS)
+
+test-%: test-%.o
 	$(CC) -o $@ $(CFLAGS) $^
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -rf *.o test-hello
+	rm -rf *.o $(TESTS)
 

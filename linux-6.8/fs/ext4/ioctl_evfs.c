@@ -1,83 +1,28 @@
 #include <linux/types.h>
-#include "evfs.h"
+#include <linux/fs.h>
+#include <linux/jbd2.h>
+#include <linux/quotaops.h>
 #include "ioctl_evfs.h"
 #include "ext4.h"
 #include "ext4_jbd2.h"
 
 // static helper function declaration
-static long ext4_evfs_hello(void);
-static int ext4_evfs_block_alloc_meta(struct buffer_head * bh, void * op_args);
-static int ext4_evfs_block_alloc_set_bit(struct buffer_head * bh, void * op_args);
-static int ext4_evfs_block_alloc_meta(struct buffer_head * bh, void * op_args);
-static long ext4_evfs_block_alloc(struct inode * ino, struct super_block * sb, ext4_fsblk_t bindex);
+extern long evfs_ext4_hello(void);
+extern long evfs_ext4_block_alloc(struct inode * ino, struct super_block * sb, ext4_fsblk_t bindex);
+extern long evfs_ext4_inode_alloc(struct super_block * sb, ino_t iindex);
 
 
 /**
  * @brief hello from evfs
  */
-static long ext4_evfs_hello() {
+extern long evfs_ext4_hello() {
     printk(KERN_INFO "Hello, bad apple!\n");
     return 0;
 }
 
 // ext4_evfs_block_alloc
-
 /**
- * @brief ext4_evfs_block_alloc_set_bit arguments
- * @param index block relative index
- */
-typedef struct __ext4_evfs_block_alloc_set_bit_args {
-    int index; // TODO: confirm index is of integer from the caller
-} ext4_evfs_block_allow_set_bit_args;
-
-/**
- * @brief helper: turn a block bit to 1
- * @param bh buffer head of the group descriptor
- * @param op_args extra arguments, see ext4_evfs_block_alloc_meta_args
- */
-static int ext4_evfs_block_alloc_set_bit(struct buffer_head * bh, void * op_args) {
-    ext4_evfs_block_allow_set_bit_args * args = (ext4_evfs_block_allow_set_bit_args *) op_args;
-    if (ext4_test_and_set_bit(args->index, bh->b_data)) {
-        return -EEXIST;
-    }
-
-    return 0;
-}
-
-/**
- * @brief ext4_evfs_block_alloc_meta arguments
- * @param sb super block
- * @param index block group index
- * @param desc group descriptor
- */
-typedef struct __ext4_evfs_block_alloc_meta_args {
-    struct super_block * sb;
-    ext4_group_t index;
-    struct ext4_group_desc * desc;
-} ext4_evfs_block_alloc_meta_args;
-
-/**
- * @brief helper: change group descriptor metadata
- * @param bh buffer head of the group descriptor
- * @param op_args extra arguments, see ext4_evfs_block_alloc_meta_args
- */
-static int ext4_evfs_block_alloc_meta(struct buffer_head * bh, void * op_args) {
-    ext4_evfs_block_alloc_meta_args * args = (ext4_evfs_block_alloc_meta_args *) op_args;
-    // modify the free block count
-    u32 free_blocks_count = args->desc->bg_free_blocks_count_hi << 16 | args->desc->bg_free_blocks_count_lo;
-    free_blocks_count -= 1;
-    args->desc->bg_free_blocks_count_hi = (u16) (free_blocks_count >> 16);
-    args->desc->bg_free_blocks_count_lo = (u16) (free_blocks_count & ~(0xFFFF << 16));
-
-    // modify the checksum
-    ext4_block_bitmap_csum_set(args->sb, args->desc, bh);
-    ext4_group_desc_csum_set(args->sb, args->index, args->desc);
-
-    return 0;
-}
-
-/**
- * @brief journal a block allocation (?to an extent).
+ * @brief journal a block allocation.
  * Note that this function alone is now creating a temporary
  * inconsistency because there's a leak block (i.e. not
  * being used by any inode)
@@ -91,68 +36,266 @@ static int ext4_evfs_block_alloc_meta(struct buffer_head * bh, void * op_args) {
  *   * -EEXIST: already allocated;
  *   * -EINVAL: fail to load group descriptor. either rcu deference fails
  *     or group index out of range;
- *   * -ERRNO: errors from ext4 functions;
+ *   * -ERRNO: other errors from ext4 functions;
  */
-static long ext4_evfs_block_alloc(struct inode * ino, struct super_block * sb, ext4_fsblk_t bindex) {
+extern long evfs_ext4_block_alloc(struct inode * ino, struct super_block * sb, ext4_fsblk_t bindex) {
     // get the group number and block offset
-    ext4_group_t grp_i;
+    ext4_group_t group;
     ext4_grpblk_t offset;
-    ext4_get_group_no_and_offset(sb, bindex, &grp_i, &offset);
+    ext4_get_group_no_and_offset(sb, bindex, &group, &offset);
+    int ret = 0, err = 0;
 
     // read the block bitmap
-    ext4_evfs_jop_binding jobp[2];
-    jobp[0].bh = ext4_read_block_bitmap(sb, grp_i);
-    if (IS_ERR(jobp[0].bh)) {
-        brelse(jobp[0].bh); // release the buffer head
-        return PTR_ERR(jobp[0].bh); // error from ext4_read_block_bitmap
+    struct buffer_head * bitmap_bh = ext4_read_block_bitmap(sb, group);
+    if (IS_ERR(bitmap_bh)) {
+        return PTR_ERR(bitmap_bh); // error from ext4_read_block_bitmap
     }
 
     // read the group descriptor
-    struct ext4_group_desc * gdp = ext4_get_group_desc(sb, grp_i, &(jobp[1].bh));
-    if (!gdp) {
-        brelse(jobp[0].bh);
-        brelse(jobp[1].bh);
-        return -EINVAL;
+    struct buffer_head * grpdsc_bh;
+    struct ext4_group_desc * grpdsc = ext4_get_group_desc(sb, group, &grpdsc_bh);
+    if (!grpdsc) {
+	brelse(bitmap_bh);
+       	return (long) -EINVAL;
     }
 
-    ext4_evfs_block_allow_set_bit_args set_bit_args;
-    set_bit_args.index = offset;
+    handle_t * handle = ext4_journal_start_with_reserve(ino, EXT4_HT_MAP_BLOCKS, 2, 0);
 
-    ext4_evfs_block_alloc_meta_args meta_args;
-    meta_args.sb = sb;
-    meta_args.index = grp_i;
-    meta_args.desc = gdp;
+    if (IS_ERR(handle)) {
+        ret = PTR_ERR(handle);
+        goto out;
+    }
 
-    jobp[0].op = ext4_evfs_block_alloc_set_bit;
-    jobp[0].op_args = &set_bit_args;
+    if ((err = ext4_journal_get_write_access(handle, sb, bitmap_bh, EXT4_JTR_NONE)) < 0) {
+        ret = err;
+        goto stop_journal;
+    }
 
-    jobp[1].op = ext4_evfs_block_alloc_meta;
-    jobp[1].op_args = &meta_args;
+    ext4_lock_group(sb, group);
+    if (ext4_test_and_set_bit(offset, bitmap_bh->b_data)) {
+        ret = -EEXIST;
+        ext4_unlock_group(sb, group);
+        goto stop_journal;
+    }
+    ext4_unlock_group(sb, group);
 
-    ext4_evfs_journal_args args;
-    args.sb = sb;
-    args.inode = ino;
-    args.type = EXT4_HT_MAP_BLOCKS;
-    args.blocks = 2;
-    args.rsv_blocks = 0;
+    if ((err = ext4_handle_dirty_metadata(handle, NULL, bitmap_bh)) < 0) {
+        ret = err;
+        goto stop_journal;
+    }
 
-    int ret = ext4_evfs_journal(&args, jobp, 2);
+    if ((err = ext4_journal_get_write_access(handle, sb, grpdsc_bh, EXT4_JTR_NONE)) < 0) {
+        ret = err;
+        goto stop_journal;
+    }
 
-    brelse(jobp[0].bh);
-    brelse(jobp[1].bh);
+    ext4_lock_group(sb, group);
+    // decrease free count
+    u32 free_blocks_count = grpdsc->bg_free_blocks_count_hi << 16 | grpdsc->bg_free_blocks_count_lo;
+    free_blocks_count -= 1;
+    grpdsc->bg_free_blocks_count_hi = (u16) (free_blocks_count >> 16);
+    grpdsc->bg_free_blocks_count_lo = (u16) (free_blocks_count & 0x0FFFF);
+
+    // modify the checksum
+    if (ext4_has_group_desc_csum(sb) && (grpdsc->bg_flags & cpu_to_le16(EXT4_BG_BLOCK_UNINIT))) {
+		grpdsc->bg_flags &= cpu_to_le16(~EXT4_BG_BLOCK_UNINIT);
+		ext4_free_group_clusters_set(sb, grpdsc,
+			ext4_free_clusters_after_init(sb, group, grpdsc));
+        ext4_block_bitmap_csum_set(sb, grpdsc, grpdsc_bh);
+        ext4_group_desc_csum_set(sb, group, grpdsc);
+    }
+    ext4_unlock_group(sb, group);
+
+    if ((err = ext4_handle_dirty_metadata(handle, ino, grpdsc_bh)) < 0) {
+        ret = err;
+        goto stop_journal;
+    }
+
+stop_journal:
+    if ((err = ext4_journal_stop(handle)) < 0) {
+        ret = err;
+        goto out;
+    }
+
+out:
+    brelse(bitmap_bh);
+    return (long) ret;
+}
+
+/** modify this for inode allocation
+ * @brief journal a inode allocation.
+ * Note that this function alone is now creating a temporary
+ * inconsistency because there's a leak inode (i.e. not
+ * being used by any inode)
+ * 
+ * WARNING: TESTING ONLY; Do NOT use this on a system fs.
+ * 
+ * @param sb pointer to the in-memory superblock
+ * @param iindex the index of inode to allocate
+ * @return 0 on success otherwise error code:
+ *   * -EEXIST: already allocated;
+ *   * -EINVAL: fail to load group descriptor. either rcu deference fails
+ *   * -ENOMEM: no enough space to allocate inode in memory
+ *     or group index out of range;
+ *   * -ERRNO: other errors from ext4 functions;
+ */
+extern long evfs_ext4_inode_alloc(struct super_block * sb, ino_t iindex) {
+    ext4_group_t group = iindex / EXT4_INODES_PER_GROUP(sb);
+    ino_t offset = iindex % EXT4_INODES_PER_GROUP(sb);
+    int ret = 0, err = 0;
+
+    struct buffer_head * bitmap_bh = ext4_read_inode_bitmap(sb, group);
+    if (IS_ERR(bitmap_bh)) {
+        return PTR_ERR(bitmap_bh); // error from ext4_read_inode_bitmap
+    }
+
+    // read the group descriptor
+    struct buffer_head * grpdsc_bh;
+    struct ext4_group_desc * grpdsc = ext4_get_group_desc(sb, group, &grpdsc_bh);
+
+    if (!grpdsc) {
+        brelse(bitmap_bh);
+        return (long) -EINVAL;
+    }
+
+    // create the inode
+    struct inode * ino = new_inode(sb);
+    if (!ino) {
+        ret = -ENOMEM;
+        goto out;
+    }
+
+    if ((err = dquot_initialize(ino))) {
+        ret = err;
+        goto out;
+    }
+
+    handle_t * handle = ext4_journal_start_with_reserve(ino, EXT4_HT_MAP_BLOCKS, 3, 0);
+   
+    if (IS_ERR(handle)) {
+        ret = PTR_ERR(handle);
+        goto out;
+    }
+
+    if ((err = ext4_journal_get_write_access(handle, sb, bitmap_bh, EXT4_JTR_NONE)) < 0) {
+        ret = err;
+        goto stop_journal;
+    }
+    
+    ext4_lock_group(sb, group);
+    if (ext4_test_and_set_bit(offset, bitmap_bh->b_data)) {
+        ret = -EEXIST;
+        ext4_unlock_group(sb, group);
+        goto stop_journal;
+    }
+    ext4_unlock_group(sb, group);
+
+    if ((err = ext4_handle_dirty_metadata(handle, NULL, bitmap_bh)) < 0) {
+        ret = err;
+        goto stop_journal;
+    }
+
+    struct ext4_inode_info *ei = EXT4_I(ino);
+
+    ino->i_ino = iindex;
+    ino->i_mode = S_IFREG | 0644; // use file for now, may change it later
+    ino->i_blocks = 0; // optimal IO size (for stat), not the fs block size; refer to ialloc.c:1253
+    simple_inode_init_ts(ino); // set time
+    set_nlink(ino, 1); // make sure the inode is not garbage since we want to use it later
+    ei->i_crtime = inode_get_mtime(ino);
+
+    memset(ei->i_data, 0, sizeof(ei->i_data));
+    ei->i_dir_start_lookup = 0;
+    ei->i_disksize = 0;
+    ei->i_flags = 0;
+    ei->i_file_acl = 0;
+    ei->i_dtime = 0;
+    ei->i_block_group = group;
+    ei->i_last_alloc_group = ~0;
+
+    ext4_set_inode_flags(ino, true);
+
+    // TODO: confirm with prof do we need to calculate
+    // inode checksum here if inode has checksum enabled
+
+    // you must locked a dangling inode here
+    if (insert_inode_locked(ino) < 0) {
+        ret = -EIO;
+        goto stop_journal;
+    }
+
+    // allocate quota for inode
+    if ((err = dquot_alloc_inode(ino))) {
+        ret = err;
+        goto fail_drop;
+    }
+
+    // note that ext4_mark_inode_dirty get write access to journal, 
+    // mark journal dirty implicitly and stop the journal,
+    // so we do NOT need them here
+    if ((err = ext4_mark_inode_dirty(handle, ino))) {
+        ret = err;
+        goto fail_free_drop;
+    }
+
+    // modify the metadata in the block group descriptor
+    if ((err = ext4_journal_get_write_access(handle, sb, grpdsc_bh, EXT4_JTR_NONE)) < 0) {
+        ret = err;
+        goto fail_free_drop;
+    }
+
+    // modify the free inode count
+    ext4_lock_group(sb, group);
+    u32 free_inodes_count = grpdsc->bg_free_inodes_count_hi << 16 | grpdsc->bg_free_inodes_count_lo;
+    free_inodes_count -= 1;
+    grpdsc->bg_free_inodes_count_hi = (u16) (free_inodes_count >> 16);
+    grpdsc->bg_free_inodes_count_lo = (u16) (free_inodes_count & 0x0FFFF);
+
+    // modify the checksum
+    if (ext4_has_group_desc_csum(sb) && (grpdsc->bg_flags & cpu_to_le16(EXT4_BG_BLOCK_UNINIT))) {
+		grpdsc->bg_flags &= cpu_to_le16(~EXT4_BG_BLOCK_UNINIT);
+		ext4_free_group_clusters_set(sb, grpdsc,
+			ext4_free_clusters_after_init(sb, group, grpdsc));
+        ext4_block_bitmap_csum_set(sb, grpdsc, grpdsc_bh);
+        ext4_group_desc_csum_set(sb, group, grpdsc);
+    }
+    ext4_unlock_group(sb, group);
+
+    if ((err = ext4_handle_dirty_metadata(handle, ino, grpdsc_bh)) < 0) {
+        ret = err;
+        goto fail_free_drop;
+    }
+
+    goto stop_journal;
+
+fail_free_drop:
+    dquot_free_inode(ino);
+
+fail_drop:
+    clear_nlink(ino);
+    unlock_new_inode(ino);
+    iput(ino);
+
+    // if anything fails during journal, let's stop journaling
+stop_journal:
+    if ((err = ext4_journal_stop(handle)) < 0) {
+        ret = err;
+        goto out;
+    }
+
+out:
+    brelse(bitmap_bh);
     return (long) ret;
 }
 
 long ext4_evfs_entry(unsigned int cmd, struct inode * ino, struct super_block * sb, unsigned long arg) {
     switch(cmd) {
         case EXT4_IOC_EVFS_HELLO:
-            return ext4_evfs_hello();
+            return evfs_ext4_hello();
         case EXT4_IOC_EVFS_BLK_ALLOC:
-            return ext4_evfs_block_alloc(ino, sb, (ext4_fsblk_t) arg);
+            return evfs_ext4_block_alloc(ino, sb, (ext4_fsblk_t) arg);
         case EXT4_IOC_EVFS_INO_ALLOC:
-            // TODO: uncomment this when done
-            // return ext4_evfs_inode_alloc(ino, sb, (ino_t) arg);
-            return 0;
+            return evfs_ext4_inode_alloc(sb, (ino_t) arg);
         default:
             return -ENOTTY;
     }

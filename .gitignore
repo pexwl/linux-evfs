@@ -1,1 +1,7 @@
 .vscode
+*.o
+
+test/images/tmp/
+test/test-hello
+test/test-balloc
+test/test-ialloc
