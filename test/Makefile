@@ -3,16 +3,17 @@ CFLAGS = -g
 
 .PHONY: all clean
 
-TESTS = test-hello test-ialloc test-balloc
+NAMES = hello iver ialloc ifree getattr balloc
+TARGETS = $(NAMES:=.x)
 
-all: $(TESTS)
+all: $(TARGETS)
 
-test-%: test-%.o
+%.x: %.o
 	$(CC) -o $@ $(CFLAGS) $^
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -rf *.o $(TESTS)
+	rm -rf *.o $(TARGETS)
 

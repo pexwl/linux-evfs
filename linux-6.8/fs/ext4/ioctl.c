@@ -23,7 +23,7 @@
 #include <linux/uuid.h>
 #include "ext4_jbd2.h"
 #include "ext4.h"
-#include "ioctl_evfs.h"
+#include "evfs.h"
 #include <linux/fsmap.h>
 #include "fsmap.h"
 #include <trace/events/ext4.h>
@@ -1619,7 +1619,7 @@ resizefs_out:
 	case EXT4_IOC_SETFSUUID:
 		return ext4_ioctl_setuuid(filp, (const void __user *)arg);
 	default:
-		return ext4_evfs_entry(cmd, inode, sb, arg);
+		return ext4_ioctl_evfs(cmd, inode, sb, arg);
 	}
 }
 
