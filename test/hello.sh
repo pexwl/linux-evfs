@@ -3,20 +3,26 @@
 export TEVFS_WORKSPACE=$(dirname "$0")
 cd $TEVFS_WORKSPACE
 
-source ./test-img-var.sh
+source ./img-var.sh
+
+rm -f $TEVFS_IMAGEDIR
 
 echo "$TEVFS_SIZE $TEVFS_NUM_INODES $TEVFS_IMAGEDIR $TEVFS_MOUNTPT"
 
 truncate -s $TEVFS_SIZE $TEVFS_IMAGEDIR
 
-if ! sudo -E ./test-img-mount.sh; then
+if ! sudo -E ./img-mkfs.sh; then
+    exit 1
+fi
+
+if ! sudo -E ./img-mount.sh; then
     exit 1
 fi
 
 make clean
 make
-echo "Running ./test-hello $TEVFS_MOUNTPT"
-./test-hello $TEVFS_MOUNTPT
+echo "Running ./hello.x $TEVFS_MOUNTPT"
+./hello.x $TEVFS_MOUNTPT
 
 sleep 1 # add some delay to wait for printk buffer flushed
 
@@ -26,7 +32,7 @@ else
     echo "Failed"
 fi
 
-if ! sudo -E ./test-img-umount.sh; then
+if ! sudo -E ./img-umount.sh; then
     exit 1
 fi
-rm $TEVFS_IMAGEDIR
+

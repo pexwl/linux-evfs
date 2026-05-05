@@ -3,11 +3,11 @@
 #include <string.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include "evfs_cmd.h"
+#include <linux/evfs.h>
 
 int main(int argc, char * argv[]) {
 	if (argc != 2) {
-		fprintf(stderr, "usage: test-hello file\n");
+		fprintf(stderr, "usage: hello file\n");
 		return 1;
 	}
 
