@@ -2,7 +2,7 @@
 tags
 *.o
 *.swp
+*.swo
 
-test/images/tmp/
-test/*.x
+test/build/*
 

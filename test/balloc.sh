@@ -14,8 +14,6 @@ if ! sudo -E ./img-mkfs.sh; then
     exit 1
 fi
 
-block_num=2048
-
 if ! sudo -E ./img-mount.sh; then
     exit 1
 fi
@@ -23,8 +21,14 @@ fi
 make clean &> /dev/null
 make &> /dev/null
 
-echo "running ./balloc.x $block_num $TEVFS_MOUNTPT"
-./balloc.x $block_num $TEVFS_MOUNTPT
+block_num=2048
+echo "running build/balloc.x $block_num $TEVFS_MOUNTPT"
+build/balloc.x $block_num $TEVFS_MOUNTPT
+echo "exit code: $?"
+
+if [[ $1 == "--no-unmount" ]]; then
+    exit 0
+fi
 
 if ! sudo -E ./img-umount.sh; then
     exit 1
@@ -35,7 +39,7 @@ sudo sync # sync manually
 # skip fsck because we have a block not pointed to by any inode
 echo ""
 echo "------ new debugfs test ------"
-res=$(sudo -E debugfs -n -R "testb $block_num" $TEVFS_IMAGEDIR)
+res=$(sudo -E debugfs -R "testb $block_num" $TEVFS_IMAGEDIR)
 echo "$res"
 
 echo ""

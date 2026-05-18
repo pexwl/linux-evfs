@@ -5,9 +5,7 @@ cd $TEVFS_WORKSPACE
 source ./img-var.sh
 
 echo -e "$TEVFS_SIZE $TEVFS_NUM_INODES $TEVFS_IMAGEDIR $TEVFS_MOUNTPT"
-
 rm -f $TEVFS_IMAGEDIR
-
 truncate -s $TEVFS_SIZE $TEVFS_IMAGEDIR
 
 if ! sudo -E ./img-mkfs.sh; then
@@ -33,11 +31,13 @@ make &> /dev/null
 
 time0=$(date -d "now" "+%s")
 
-echo -e "running ./ialloc.x $inode_num $TEVFS_MOUNTPT\n"
-./ialloc.x $inode_num $TEVFS_MOUNTPT
+echo -e "running build/ialloc.x $inode_num $TEVFS_MOUNTPT\n"
+build/ialloc.x $inode_num $TEVFS_MOUNTPT
 
-if ! sudo -E ./img-umount.sh; then
-    exit 1
+if [[ $1 != "--no-unmount" ]]; then
+    if ! sudo -E ./img-umount.sh; then
+        exit 1
+    fi
 fi
 
 sudo sync # manually sync

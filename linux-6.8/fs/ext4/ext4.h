@@ -2880,9 +2880,14 @@ extern int ext4_init_inode_table(struct super_block *sb,
 				 ext4_group_t group, int barrier);
 extern void ext4_end_bitmap_read(struct buffer_head *bh, int uptodate);
 
-/* ialloc.c: evfs */
-extern struct buffer_head * ext4_read_inode_bitmap(struct super_block *sb,
-	ext4_group_t block_group);
+// evfs: ialloc
+extern struct buffer_head *
+ext4_read_inode_bitmap(struct super_block *sb, ext4_group_t block_group);
+
+// evfs: dentry update  
+extern struct buffer_head *
+ext4_find_entry(struct inode *dir, const struct qstr *d_name,
+			struct ext4_dir_entry_2 **res_dir, int *inlined);
 
 /* fast_commit.c */
 int ext4_fc_info_show(struct seq_file *seq, void *v);

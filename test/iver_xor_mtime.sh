@@ -18,8 +18,8 @@ if ! sudo -E ./img-mount.sh; then
     exit 1
 fi
 
-make clean
-make
+make clean &> /dev/null
+make &> /dev/null
 
 # create a file
 file="$TEVFS_MOUNTPT/abc"
@@ -44,7 +44,7 @@ for ((i=0; i<256; i++)); do
 	
 
 	curr_mtime=$(ls --full-time $file | tail -n1 | awk '{print $7,$8}' )
-	curr_ver=$(./iver.x $file)
+	curr_ver=$(build/iver.x $file)
 
 #	hashed_curr_mtime=$(echo $curr_mtime | sha256sum | awk '{print $1}')
 #	hashed_prev_mtime=$(echo $curr_mtime | sha256sum | awk '{print $1}')

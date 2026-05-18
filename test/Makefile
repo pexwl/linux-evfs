@@ -3,15 +3,23 @@ CFLAGS = -g
 
 .PHONY: all clean
 
-NAMES = hello iver ialloc ifree getattr balloc
-TARGETS = $(NAMES:=.x)
+SRC_DIR := src
+BUILD_DIR := build
 
-all: $(TARGETS)
+NAMES = hello iver balloc bfree ialloc ifree getattr\
+	dentry_add dentry_read dentry_update dentry_delete
 
-%.x: %.o
+TARGETS = $(addprefix $(BUILD_DIR)/, $(NAMES:=.x))
+
+all: $(BUILD_DIR) $(TARGETS)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/%.x: $(BUILD_DIR)/%.o | $(BUILD_DIR)
 	$(CC) -o $@ $(CFLAGS) $^
 
-%.o: %.c
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:

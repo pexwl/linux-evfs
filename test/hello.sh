@@ -19,10 +19,11 @@ if ! sudo -E ./img-mount.sh; then
     exit 1
 fi
 
-make clean
-make
-echo "Running ./hello.x $TEVFS_MOUNTPT"
-./hello.x $TEVFS_MOUNTPT
+make clean &> /dev/null
+make &> /dev/null
+
+echo "Running build/hello.x $TEVFS_MOUNTPT"
+build/hello.x $TEVFS_MOUNTPT
 
 sleep 1 # add some delay to wait for printk buffer flushed
 

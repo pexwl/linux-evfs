@@ -1,6 +1,6 @@
 cd $(dirname -- $0)
 
-rsync -av --exclude='.*.swp' linux-6.8/* ../linux-6.8/.
+rsync -av --exclude={'.*.swp','.*.swo'} linux-6.8/* ../linux-6.8/.
 cd ../linux-6.8/
 x=$(expr $(nproc) - 1)
 if [ "$x" -le 1 ]; then

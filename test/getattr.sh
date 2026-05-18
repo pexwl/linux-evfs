@@ -18,14 +18,14 @@ if ! sudo -E ./img-mount.sh; then
     exit 1
 fi
 
-make clean
-make
+make clean &> /dev/null
+make &> /dev/null
 
 # create a file
 file="$TEVFS_MOUNTPT/abc"
 touch $file
-echo -e "\n>>> ./getattr.x $file"
-./getattr.x $file
+echo -e "\n>>> build/getattr.x $file"
+build/getattr.x $file
 echo -e "<<<"
 
 echo -e "\n>>> stat $file"
@@ -36,8 +36,8 @@ rm $file
 sudo sync
 # create a directory
 mkdir -p $file
-echo -e "\n>>> ./getattr.x $file"
-./getattr.x $file
+echo -e "\n>>> build/getattr.x $file"
+build/getattr.x $file
 echo -e "<<<"
 
 echo -e "\n>>> stat $file"
