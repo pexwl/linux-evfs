@@ -1,12 +1,12 @@
 CC = gcc
-CFLAGS = -g
+CFLAGS = -g -Wall -Werror
 
 .PHONY: all clean
 
 SRC_DIR := src
 BUILD_DIR := build
 
-NAMES = hello iver balloc bfree ialloc ifree getattr\
+NAMES = hello iver balloc bfree ialloc ifree iread\
 	dentry_add dentry_read dentry_update dentry_delete
 
 TARGETS = $(addprefix $(BUILD_DIR)/, $(NAMES:=.x))

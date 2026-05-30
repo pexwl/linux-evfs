@@ -1,5 +1,4 @@
 #!/bin/bash
-
 export TEVFS_WORKSPACE=$(dirname "$0")
 cd $TEVFS_WORKSPACE
 
@@ -19,21 +18,23 @@ if ! sudo -E ./img-mount.sh; then
     exit 1
 fi
 
-rm build/hello.x
-make build/hello.x &> /dev/null
+make build/iread.x &> /dev/null
 
-echo "Running build/hello.x $TEVFS_MOUNTPT"
-build/hello.x $TEVFS_MOUNTPT
+# create a file
+file="$TEVFS_MOUNTPT/abc"
+touch $file
 
-sleep 1 # add some delay to wait for printk buffer flushed
+sudo sync
 
-if dmesg | grep "bad apple" > /dev/null; then
-    echo "OK"
-else
-    echo "Failed"
-fi
+res=$(stat "$file")
+ino_num=$(echo -e "$res" | head -n3 | tail -n1 | awk '{print $4}')
+echo -e "\n>>> build/iread.x $ino_num $file"
+build/iread.x $ino_num $file
+echo -e "<<<"
+echo -e "\n>>> stat $ffile"
+echo -e "$res"
+echo -e "<<<"
 
 if ! sudo -E ./img-umount.sh; then
     exit 1
 fi
-

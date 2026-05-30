@@ -6,20 +6,25 @@
 #include "evfs.h"
 #include "ext4.h"
 #include "ext4_jbd2.h"
+#include "ext4_extents.h"
 #include "../internal.h"
 
 // core evfs functions
 long evfs_hello(void);
 long evfs_iver(struct inode *, unsigned long long *);
-long evfs_attr(struct inode *, struct evfs_stat *); 
 long evfs_block_alloc(struct inode *, struct super_block *, ext4_fsblk_t);
 long evfs_block_free(struct inode *, struct super_block *, ext4_fsblk_t);
+long evfs_fspace_iter(struct super_block *, struct ext4_evfs_fsp_iter_args *);
+long evfs_inode_read(struct super_block *, struct evfs_ino_read_args *); 
 long evfs_inode_alloc(struct super_block *, ino_t);
 long evfs_inode_free(struct super_block *, ino_t);
+long evfs_inode_iter(struct super_block *, struct ext4_evfs_ino_iter_args *);
+long evfs_inode_remap(struct super_block *, struct ext4_evfs_ino_rmp_args *);
 long evfs_dentry_add(struct super_block *, struct ext4_evfs_de_add_args *);
 long evfs_dentry_read(struct super_block *, struct ext4_evfs_de_read_args *);
 long evfs_dentry_delete(struct super_block *, struct ext4_evfs_de_delete_args *);
 long evfs_dentry_update(struct super_block *, struct ext4_evfs_de_update_args *);
+long evfs_extent_read(struct super_block *, struct ext4_evfs_ext_read_args *);
 
 /**
  * @brief hello from evfs
@@ -39,40 +44,6 @@ long evfs_iver(struct inode * ino, unsigned long long * ver)
 	unsigned long long kver = atomic64_read(&ino->i_version);
 	memcpy(ver, &kver, sizeof(unsigned long long));
 	return 0;
-}
-
-/**
- * @brief inode statistics with version
- * This is a kernel helper and/or a function hence we don't copy to
- * user directly here
- */
-long evfs_attr(struct inode * ino, struct evfs_stat * stat)
-{
-	struct evfs_stat kstat;
-	kstat.est_dev = ino->i_sb->s_dev;
-	kstat.est_ino = ino->i_ino;
-	kstat.est_mode = ino->i_mode;
-	kstat.est_nlink = ino->i_nlink;
-	kstat.est_uid = ino->i_uid.val;
-	kstat.est_gid = ino->i_gid.val;
-
-	if (S_ISBLK(ino->i_mode) || S_ISCHR(ino->i_mode)) {
-		kstat.est_rdev = ino->i_rdev;
-	}
-
-	kstat.est_version = atomic64_read(&ino->i_version);
-	kstat.est_size = ino->i_size;
-	kstat.est_blksize = i_blocksize(ino);
-	kstat.est_blocks = ino->i_blocks;
-	kstat.est_atime = ino->__i_atime.tv_sec;
-	kstat.est_atime_nsec = ino->__i_atime.tv_nsec;
-	kstat.est_mtime = ino->__i_mtime.tv_sec;
-	kstat.est_mtime_nsec = ino->__i_mtime.tv_nsec;
-	kstat.est_ctime = ino->__i_ctime.tv_sec;
-	kstat.est_ctime_nsec = ino->__i_ctime.tv_nsec;
-
-	memcpy(stat, &kstat, sizeof(struct evfs_stat));
-	return 0; 
 }
 
 /**
@@ -279,6 +250,94 @@ out:
 	return (long) ret;
 }
 
+/**
+ * @brief inode statistics with version
+ * This is a kernel helper and/or a function hence we don't copy to
+ * user directly here
+ */
+long evfs_inode_read(struct super_block * sb, struct evfs_ino_read_args * args)
+{
+	int ret = 0;
+	struct inode * ino = ext4_iget(sb, args->in.iindex, EXT4_IGET_NORMAL);
+	if (IS_ERR(ino)) {
+		ret = PTR_ERR(ino);
+		goto out;
+	}
+
+	inode_lock_shared(ino);
+
+	evfs_stat stat;
+	stat.est_dev = ino->i_sb->s_dev;
+	stat.est_ino = ino->i_ino;
+	stat.est_mode = ino->i_mode;
+	stat.est_nlink = ino->i_nlink;
+	stat.est_uid = ino->i_uid.val;
+	stat.est_gid = ino->i_gid.val;
+
+	if (S_ISBLK(ino->i_mode) || S_ISCHR(ino->i_mode)) {
+		stat.est_rdev = ino->i_rdev;
+	}
+
+	stat.est_version = atomic64_read(&ino->i_version);
+	stat.est_size = ino->i_size;
+	stat.est_blksize = i_blocksize(ino);
+	stat.est_blocks = ino->i_blocks;
+	stat.est_atime = ino->__i_atime.tv_sec;
+	stat.est_atime_nsec = ino->__i_atime.tv_nsec;
+	stat.est_mtime = ino->__i_mtime.tv_sec;
+	stat.est_mtime_nsec = ino->__i_mtime.tv_nsec;
+	stat.est_ctime = ino->__i_ctime.tv_sec;
+	stat.est_ctime_nsec = ino->__i_ctime.tv_nsec;
+
+	inode_unlock_shared(ino);
+
+	memcpy(&(args->out), &stat, sizeof(evfs_stat));
+	iput(ino);
+
+out:
+	return (long) ret; 
+}
+
+long evfs_fspace_iter(struct super_block * sb, struct ext4_evfs_fsp_iter_args * args)
+{
+	__u64 found_start = 0;
+	__u64 found_length = 0;
+	__u64 total_blocks = ext4_blocks_count(EXT4_SB(sb)->s_es);
+	int in_free_extent = 0;
+
+	for (__u64 b = args->in.start; b <= total_blocks; b++) {
+		ext4_group_t group;
+		ext4_grpblk_t offset;
+		ext4_get_group_no_and_offset(sb, b, &group, &offset);
+
+		struct buffer_head *bitmap_bh = ext4_read_block_bitmap(sb, group);
+		// found unreadable blocks
+		if (IS_ERR_OR_NULL(bitmap_bh)) {
+			// assume current free extent stops right before unreadable blocks
+			if (in_free_extent) break;
+			// otherwise, continue checking for free extents after unreadable blocks
+			continue;
+		}
+
+		int is_free = !ext4_test_bit(offset, bitmap_bh->b_data);
+		brelse(bitmap_bh);
+
+		if (is_free) {
+			if (!in_free_extent) {
+				found_start = b;
+				in_free_extent = 1;
+			}
+			found_length++;
+		} else if (in_free_extent) {
+			break;
+		}
+	}
+
+	args->out.block = found_start;
+	args->out.length = found_length;
+	return 0;
+}
+
 /** 
  * @brief journal a inode allocation.
  * Note that this function alone is now creating a temporary
@@ -412,7 +471,7 @@ long evfs_inode_alloc(struct super_block * sb, ino_t iindex)
 	}
 
 	// note that ext4_mark_inode_dirty get write access to journal, 
-	// mark journal dirty implicitly, so we do NOT need it here
+	// so we do NOT need it here
 	if ((err = ext4_mark_inode_dirty(handle, ino))) {
 		ret = err;
 		goto fail_free_drop;
@@ -547,6 +606,147 @@ out:
 	return (long) ret;
 }
 
+long evfs_inode_iter(struct super_block * sb, struct ext4_evfs_ino_iter_args * args)
+{
+	__u32 found = 0;
+	__u32 total = le32_to_cpu(EXT4_SB(sb)->s_es->s_inodes_count);
+
+	for (__u32 i = args->in.start; i <= total; i++) {
+		// compute the group and offset of the current inode
+		// inodes are 1-indexed
+		ext4_group_t group = (i - 1) / EXT4_INODES_PER_GROUP(sb);
+		ext4_grpblk_t offset = (i - 1) % EXT4_INODES_PER_GROUP(sb);
+
+		// read inode bitmap for this group
+		struct buffer_head *bitmap_bh = ext4_read_inode_bitmap(sb, group);
+		if (IS_ERR_OR_NULL(bitmap_bh)) {
+			continue;
+		}
+
+		int in_use = ext4_test_bit(offset, bitmap_bh->b_data);
+		brelse(bitmap_bh);
+
+		if (in_use) {
+			found = i;
+			break;
+		}
+	}
+
+	args->out.ino_num = found;
+	return 0;
+}
+
+long evfs_inode_remap(struct super_block * sb, struct ext4_evfs_ino_rmp_args * args)
+{	
+	struct inode *target_inode = NULL;
+	bool inode_locked = false;
+	bool ext_tree_locked = false;
+	handle_t *handle = NULL;
+	int err = 0;
+
+	/* User array of new extents */
+	if (args->in.num_exts == 0 || args->in.num_exts > MAX_EXT4_EXTENTS) {
+		err = -EINVAL;
+		pr_warn("evfs: Invalid number of extents: %d\n", args->in.num_exts);
+		goto inode_remap_out;
+	}
+
+	target_inode = ext4_iget(sb, args->in.ino_num, EXT4_IGET_NORMAL); 
+	if (IS_ERR(target_inode)) {
+		err = PTR_ERR(target_inode);
+		goto inode_remap_out;
+	}
+
+	if (!ext4_test_inode_flag(target_inode, EXT4_INODE_EXTENTS)) {
+		err = -EOPNOTSUPP;
+		goto inode_remap_out;
+	}
+
+	/* Affect up to 10 blocks */
+	handle = ext4_journal_start(target_inode, EXT4_HT_MISC, 10);
+	if (IS_ERR(handle)) {
+		err = PTR_ERR(handle);
+		goto inode_remap_out;
+	}
+
+	inode_lock(target_inode);	/* lock inode */
+	inode_locked = true;
+	down_write(&EXT4_I(target_inode)->i_data_sem);	/* lock extent tree with rw semaphore */
+	ext_tree_locked = true;
+
+	/* Prevent new writes during page invalidation */
+	filemap_write_and_wait(&target_inode->i_data);
+
+	/* Invalidate stale page cache */
+	invalidate_inode_pages2(target_inode->i_mapping);
+
+	/* Remove all existing extents */
+	err = ext4_ext_remove_space(target_inode, 0, EXT_MAX_BLOCKS - 1);
+	if (err) {
+		pr_warn("evfs: ext4_ext_remove_space failed: %d\n", err);
+		goto inode_remap_out;
+	}
+
+	/* Inode removed of its data; set size to 0 */
+	target_inode->i_size = 0;
+
+	ext4_lblk_t logical_block = 0;	/* Logical block that each new extent starts from */
+	for (int i = 0; i < args->in.num_exts; i++) {
+		/* Insert new extent at logical block 0 */
+		struct ext4_extent new_extent;
+		new_extent.ee_block = cpu_to_le32(logical_block);
+		new_extent.ee_len = cpu_to_le16(args->in.exts[i].length);
+		new_extent.ee_start_hi = cpu_to_le16(args->in.exts[i].start >> 32);
+		new_extent.ee_start_lo = cpu_to_le32(args->in.exts[i].start & 0xffffffffULL);
+
+		struct ext4_ext_path *path = NULL;
+		path = ext4_find_extent(target_inode, logical_block, &path, 0);
+		if (IS_ERR(path)) {
+			err = PTR_ERR(path);
+			path = NULL;
+			goto inode_remap_out;
+		}
+
+		err = ext4_ext_insert_extent(handle, target_inode, &path, &new_extent, 0);
+		if (path) {
+			ext4_ext_drop_refs(path);
+			kfree(path);
+		}
+		if (err) {
+			pr_warn("evfs: ext4_ext_insert_extent failed: %d\n", err);
+			goto inode_remap_out;
+		}
+
+		/* update inode size and mark dirty */
+		target_inode->i_size += (loff_t)(args->in.exts[i].length) * sb->s_blocksize;
+
+		/* Update starting logical block for the next extent */
+		logical_block += args->in.exts[i].length;
+	}
+	
+	err = ext4_mark_inode_dirty(handle, target_inode);
+	if (err) {
+		goto inode_remap_out;
+	}
+
+	ext4_journal_stop(handle);
+	handle = NULL;  /* already stopped, don't stop again in cleanup */
+	write_inode_now(target_inode, 1);  /* 1 = wait for completion */
+
+inode_remap_out:
+	if (!IS_ERR_OR_NULL(target_inode)) {
+		if (ext_tree_locked) up_write(&EXT4_I(target_inode)->i_data_sem);
+		if (inode_locked) inode_unlock(target_inode);
+	}
+	if (!IS_ERR_OR_NULL(handle)) {
+		ext4_journal_stop(handle);
+	}
+	if (!IS_ERR_OR_NULL(target_inode)) {
+		iput(target_inode);
+	}
+	return err;
+}
+
 long evfs_dentry_add(struct super_block * sb, struct ext4_evfs_de_add_args * args)
 {
 	pr_info("ext4: ADD_DENTRY called\n");
@@ -557,58 +757,68 @@ long evfs_dentry_add(struct super_block * sb, struct ext4_evfs_de_add_args * arg
 	struct qstr qname;
 	int err;
 
-	args->name[sizeof(args->name) - 1] = 0;
-	size_t name_len = strlen(args->name);
+	size_t name_len = strlen(args->in.name);
 	if (name_len == 0 || name_len > EXT4_NAME_LEN) {
 		pr_warn("ext4-evfs: invalid name length %zu\n", name_len);
 		return -EINVAL;
 	}
 
 	// get parent directory inode
-	dir_inode = ext4_iget(sb, args->parent_inode_number, EXT4_IGET_NORMAL);
+	dir_inode = ext4_iget(sb, args->in.parent_ino_num, EXT4_IGET_NORMAL);
 	if (IS_ERR(dir_inode)) {
 		return PTR_ERR(dir_inode);
 	}
+
+	inode_lock(dir_inode);
+
 	// ensure parent is a dir
 	if (!S_ISDIR(dir_inode->i_mode)) {
-		pr_warn("ext4-evfs: parent inode %llu is not a directory\n", args->parent_inode_number);
+		pr_warn("ext4-evfs: parent inode %lu is not a directory\n", args->in.parent_ino_num);
+		inode_unlock(dir_inode);
 		iput(dir_inode);
 		return -ENOTDIR;
 	}
 
 	// get child inode (this must exist)
-	child_inode = ext4_iget(sb, args->child_inode_number, EXT4_IGET_NORMAL);
+	child_inode = ext4_iget(sb, args->in.child_ino_num, EXT4_IGET_NORMAL);
 	if (IS_ERR(child_inode)) {
-		iput(dir_inode);	// todo: what is this
+		inode_unlock(dir_inode);
+		iput(dir_inode);
 		return PTR_ERR(child_inode);
 	}
 
-	// create a dentry for the parent
+	// look up parent dentry
 	parent_dentry = d_find_any_alias(dir_inode);
 	if (!parent_dentry) {
-		parent_dentry = d_alloc_pseudo(sb, &(struct qstr)QSTR_INIT("/", 1));
-		if (!parent_dentry) {
-			iput(child_inode);
-			iput(dir_inode);
-			return -ENOMEM;
-		}
-		d_instantiate(parent_dentry, dir_inode);
+		inode_unlock(dir_inode);
+		iput(child_inode);
+		iput(dir_inode);
+		return -ENOENT;
 	}
 
 	// create dentry for new entry
-	qname.name = args->name;
-	qname.len = strlen(args->name);
-	qname.hash = 0;
+	qname.name = args->in.name;
+	qname.len = strlen(args->in.name);
+	qname.hash = full_name_hash(parent_dentry, qname.name, qname.len);
+
+	if (unlikely(IS_CASEFOLDED(dir_inode))) {
+		sb->s_d_op->d_hash(parent_dentry, &qname);
+	}
 
 	new_dentry = d_alloc(parent_dentry, &qname);
 	if (!new_dentry) {
+		inode_unlock(dir_inode);
 		dput(parent_dentry);
 		iput(child_inode);
 		iput(dir_inode);
 		return -ENOMEM;
 	}
 
+	// TODO: add `dquot_initialize(dir);` refer to fs/ext4/namei.c:3513
+	inode_lock(child_inode);
 	err = __ext4_link(dir_inode, child_inode, new_dentry);
+	inode_unlock(child_inode);
+	inode_unlock(dir_inode);
 
 	// cleanup
 	dput(new_dentry);
@@ -621,8 +831,8 @@ long evfs_dentry_add(struct super_block * sb, struct ext4_evfs_de_add_args * arg
 		return (long) err;
 	}
 
-	pr_info("ext4-evfs: added entry '%s' (parent=%llu, child=%llu)\n",
-			args->name, args->parent_inode_number, args->child_inode_number);
+	pr_info("ext4-evfs: added entry '%s' (parent=%lu, child=%lu)\n",
+			args->in.name, args->in.parent_ino_num, args->in.child_ino_num);
 
 	return 0;
 }
@@ -639,18 +849,21 @@ long evfs_dentry_read(struct super_block * sb, struct ext4_evfs_de_read_args * a
 	int err = 0;
 
 	// get directory inode
-	dir_inode = ext4_iget(sb, args->dir_inode_number, EXT4_IGET_NORMAL);
+	dir_inode = ext4_iget(sb, args->in.dir_ino_num, EXT4_IGET_NORMAL);
 	if (IS_ERR(dir_inode)) {
 		err = PTR_ERR(dir_inode);
-		pr_warn("ext4-evfs: failed to get directory inode: %llu: %d\n",
-				args->dir_inode_number, err);
+		pr_warn("ext4-evfs: failed to get directory inode: %lu: %d\n",
+				args->in.dir_ino_num, err);
 		goto out;
 	}
 
+	inode_lock_shared(dir_inode);
+
 	// verify it is a directory
 	if (!(S_ISDIR(dir_inode->i_mode))) {
+		inode_unlock_shared(dir_inode);
 		err = -ENOTDIR;
-		pr_warn("ext4-evfs: inode %llu is not a directory\n", args->dir_inode_number);
+		pr_warn("ext4-evfs: inode %lu is not a directory\n", args->in.dir_ino_num);
 		goto dir_check_fail;
 	}
 
@@ -659,12 +872,13 @@ long evfs_dentry_read(struct super_block * sb, struct ext4_evfs_de_read_args * a
 	// read first directory block
 	bh = ext4_bread(NULL, dir_inode, 0, 0);
 	if (IS_ERR_OR_NULL(bh)) {
+		inode_unlock_shared(dir_inode);
 		err = bh ? PTR_ERR(bh) : -EIO;
-		pr_warn("ext4-evfs: failed to read directory block:%d\n", err);
+		pr_warn("ext4-evfs: failed to read directory block: %d\n", err);
 		goto dir_check_fail;
 	}
 
-	curr_dentry = (struct ext4_dir_entry_2 *)bh->b_data;
+	curr_dentry = (struct ext4_dir_entry_2 *) bh->b_data;
 
 	// iterate thru dentries till we find the specified one
 	unsigned int trailing_checksum_size = 0; // space reserved at the end of the block for the checksum
@@ -681,13 +895,14 @@ long evfs_dentry_read(struct super_block * sb, struct ext4_evfs_de_read_args * a
 		}
 
 		if (curr_dentry->inode != 0) {	// skip deleted entries
-			if (entry_count == args->target_dentry_index) {	// found specified dentry
+			if (entry_count == args->in.target_dentry_index) {	// found specified dentry
 				// copy info of this found dentry
-				args->inode_number = le32_to_cpu(curr_dentry->inode);
-				args->file_type = curr_dentry->file_type;
-				args->name_len = curr_dentry->name_len;
-				memcpy(args->name, curr_dentry->name, curr_dentry->name_len);
-				args->name[curr_dentry->name_len] = 0;
+				args->out.ino_num = le32_to_cpu(curr_dentry->inode);
+				args->out.file_type = curr_dentry->file_type;
+				args->out.name_len = curr_dentry->name_len;
+				memcpy(args->out.name, curr_dentry->name, curr_dentry->name_len);
+				args->out.name[EXT4_NAME_LEN - 1] = 0;
+				inode_unlock_shared(dir_inode);
 				goto release;
 			}
 
@@ -700,10 +915,11 @@ long evfs_dentry_read(struct super_block * sb, struct ext4_evfs_de_read_args * a
 	}
 
 	// didn't find specified inode
-	args->inode_number = 0;
-	args->file_type = 0;
-	args->name_len = 0;
-	args->name[0] = 0;
+	inode_unlock_shared(dir_inode);
+	args->out.ino_num = 0;
+	args->out.file_type = 0;
+	args->out.name_len = 0;
+	args->out.name[0] = 0;
 
 release:
 	brelse(bh);
@@ -715,92 +931,108 @@ out:
 
 long evfs_dentry_delete(struct super_block * sb, struct ext4_evfs_de_delete_args * args)
 {
+	// TODO: suggestion: use `lookup_one_len` to replace finding 
+	// TODO: 	     inode manually to improve maintainability
 	pr_info("ext4: DELETE_DENTRY called\n");
 
 	struct buffer_head * bh = NULL;
 	struct inode * dir_inode;
 	struct inode * child_inode = NULL;
 	struct dentry * parent_dentry;
-	struct dentry * delete_dentry;
+	struct dentry * target_dentry;
 	struct qstr qname;
 	struct ext4_dir_entry_2 * de;	
 	int err = 0;
-
-	args->name[sizeof(args->name) - 1] = 0;	// input sanitation
+	bool parent_dput_called = false;
+	bool target_dput_called = false;
 
 	// get directory inode
-	dir_inode = ext4_iget(sb, args->dir_inode_number, EXT4_IGET_NORMAL);
+	dir_inode = ext4_iget(sb, args->in.dir_ino_num, EXT4_IGET_NORMAL);
 	if (IS_ERR(dir_inode)) {
 		err = PTR_ERR(dir_inode);
-		pr_warn("ext4-evfs: failed to get directory inode: %llu: %d\n",
-				args->dir_inode_number, err);
+		pr_warn("ext4-evfs: failed to get directory inode: %lu: %d\n",
+				args->in.dir_ino_num, err);
 		goto out;
 	}
+
+	// lock the parent inode
+	inode_lock(dir_inode);
 
 	// verify it is a directory
 	if (!(S_ISDIR(dir_inode->i_mode))) {
-		pr_warn("ext4-evfs: inode %llu is not a directory\n", args->dir_inode_number);
-		iput(dir_inode);
-		return -ENOTDIR;
+		pr_warn("ext4-evfs: inode %lu is not a directory\n", args->in.dir_ino_num);
+		err = -ENOTDIR;
+		goto release_pino;
 	}
 
-	qname.name = args->name;
-	qname.len = strlen(args->name);
-	qname.hash = 0;
+	// look up parent dentry
+	parent_dentry = d_find_any_alias(dir_inode);
+	if (!parent_dentry) {
+		err = -ENOENT;
+		goto release_pino;
+	}
+
+	qname.name = args->in.name;
+	qname.len = strlen(args->in.name);
+	qname.hash = full_name_hash(parent_dentry, qname.name, qname.len);
+
+	if (unlikely(IS_CASEFOLDED(dir_inode))) {
+		sb->s_d_op->d_hash(parent_dentry, &qname);
+	}
 
 	bh = ext4_find_entry(dir_inode, &qname, &de, NULL);
 	if (IS_ERR_OR_NULL(bh)) {
-		pr_warn("ext4-evfs: entry '%s' not found\n", args->name);
-		iput(dir_inode);
-		return bh ? PTR_ERR(bh) : -ENOENT;
+		pr_warn("ext4-evfs: entry '%s' not found\n", qname.name);
+		err = bh ? PTR_ERR(bh) : -ENOENT;
+		goto release_pde;
 	}
 
 	// get child inode
-	uint32_t child_inode_number = le32_to_cpu(de->inode);
-	child_inode = ext4_iget(sb, child_inode_number, EXT4_IGET_NORMAL);
+	uint32_t child_ino_num = le32_to_cpu(de->inode);
 	brelse(bh);
+	child_inode = ext4_iget(sb, child_ino_num, EXT4_IGET_NORMAL);
 
 	if (IS_ERR(child_inode)) {
-		err = PTR_ERR(child_inode);
-		iput(dir_inode);
 		pr_warn("ext4-evfs: failed to get child inode: %d\n", err);
-		goto out;
+		err = PTR_ERR(child_inode);
+		goto release_pde;
 	}
 
-	// create dentries
-	parent_dentry = d_find_any_alias(dir_inode);
-	if (!parent_dentry) {
-		parent_dentry = d_alloc_pseudo(sb, &(struct qstr)QSTR_INIT("/", 1));
-		if (!parent_dentry) {
-			iput(child_inode);
-			iput(dir_inode);
-			return -ENOMEM;
-		}
-		d_instantiate(parent_dentry, dir_inode);
+	inode_lock(child_inode);
+	target_dentry = d_alloc(parent_dentry, &qname);
+	if (!target_dentry) {
+		err = -ENOMEM;
+		goto release_cino;
 	}
 
-	delete_dentry = d_alloc(parent_dentry, &qname);
-	if (!delete_dentry) {
-		dput(parent_dentry);
-		iput(child_inode);
-		iput(dir_inode);
-		return -ENOMEM;
-	}
-
-	err = __ext4_unlink(dir_inode, &qname, child_inode, delete_dentry);
+	d_add(target_dentry, child_inode);
+	printk(KERN_INFO "ext4-evfs: inode state %lx\n", child_inode->i_state);
+	// TODO: add `dquot_initialize(dir);` refer to fs/ext4/namei.c:3316
+	// TODO: add `dquot_initialize(d_inode(dentry));` refer to fs/ext4/namei.c:3319
+	err = __ext4_unlink(dir_inode, &qname, child_inode, target_dentry);
 
 	// cleanup
-	dput(delete_dentry);
-	dput(parent_dentry);
-	iput(child_inode);
-	iput(dir_inode);
+	dput(target_dentry);
+	target_dput_called = true;
 
 	if (err) {
 		pr_warn("ext4-evfs: __ext4_unlink failed: %d\n", err);
 	} else {
-		pr_info("ext4-evfs: deleted entry '%s' (inode number=%u) from parent=%llu\n",
-				args->name, child_inode_number, args->dir_inode_number);
+		pr_info("ext4-evfs: deleted entry '%s' (inode number=%u) from parent=%lu\n",
+				args->in.name, child_ino_num, args->in.dir_ino_num);
 	}
+
+release_cino:
+	inode_unlock(child_inode);
+	if (!target_dput_called) iput(child_inode);
+
+release_pde:
+	dput(parent_dentry);
+	parent_dput_called = true;	
+
+release_pino:
+	inode_unlock(dir_inode);
+	if (!parent_dput_called) iput(dir_inode);
 
 out:
 	return (long) err;
@@ -820,23 +1052,22 @@ long evfs_dentry_update(struct super_block * sb, struct ext4_evfs_de_update_args
 	int err = -ENOENT;
 
 	// get directory inode
-	dir_inode = ext4_iget(sb, args->dir_inode_number, EXT4_IGET_NORMAL);
+	dir_inode = ext4_iget(sb, args->in.dir_ino_num, EXT4_IGET_NORMAL);
 	if (IS_ERR(dir_inode)) {
 		err = PTR_ERR(dir_inode);
-		pr_warn("ext4-evfs: failed to get directory inode: %llu: %d\n",
-				args->dir_inode_number, err);
+		pr_warn("ext4-evfs: failed to get directory inode: %lu: %d\n",
+				args->in.dir_ino_num, err);
 		return err;
 	}
 
 	// verify it is a directory
 	if (!(S_ISDIR(dir_inode->i_mode))) {
-		pr_warn("ext4-evfs: inode %llu is not a directory\n", args->dir_inode_number);
+		pr_warn("ext4-evfs: inode %lu is not a directory\n", args->in.dir_ino_num);
 		iput(dir_inode);
 		return -ENOTDIR;
 	}
 
 	blocksize = dir_inode->i_sb->s_blocksize;
-
 	// start journal transaction
 	handle = ext4_journal_start(dir_inode, EXT4_HT_DIR, 1);
 	if (IS_ERR(handle)) {
@@ -860,7 +1091,7 @@ long evfs_dentry_update(struct super_block * sb, struct ext4_evfs_de_update_args
 		goto update_dentry_out_brelse;
 	}
 
-	curr_dentry = (struct ext4_dir_entry_2 *)bh->b_data;
+	curr_dentry = (struct ext4_dir_entry_2 *) bh->b_data;
 
 	// iterate through to find the ith dentry
 	unsigned int trailing_checksum_size = 0; // space reserved at the end of the block for the checksum
@@ -878,8 +1109,8 @@ long evfs_dentry_update(struct super_block * sb, struct ext4_evfs_de_update_args
 
 		if (curr_dentry->inode != 0) {	// skip deleted entries
 			// found target dentry
-			if (entry_count == args->target_dentry_index) {	
-				curr_dentry->inode = cpu_to_le32(args->new_inode_number);
+			if (entry_count == args->in.target_dentry_index) {	
+				curr_dentry->inode = cpu_to_le32(args->in.new_ino_num);
 
 				// mark buffer dirty (handles dirblock checksum)
 				err = ext4_handle_dirty_dirblock(handle, dir_inode, bh);
@@ -894,13 +1125,13 @@ long evfs_dentry_update(struct super_block * sb, struct ext4_evfs_de_update_args
 		}
 
 		offset += rec_len;
-		curr_dentry = (struct ext4_dir_entry_2 *)((char *)curr_dentry + rec_len);
+		curr_dentry = (struct ext4_dir_entry_2 *)((char *) curr_dentry + rec_len);
 
 	}
 
 	if (err == -ENOENT) {
 		pr_warn("ext4-evfs: update failed, index %u out of bounds\n",
-				args->target_dentry_index);
+				args->in.target_dentry_index);
 	}
 
 update_dentry_out_brelse:
@@ -909,6 +1140,81 @@ update_dentry_out_stop:
 	ext4_journal_stop(handle);
 	iput(dir_inode);
 	return (long) err;
+}
+
+long evfs_extent_read(struct super_block * sb, struct ext4_evfs_ext_read_args * args)
+{
+	struct ext4_ext_path *path = NULL;
+	__u32 count = 0;
+	ext4_lblk_t block = 0;
+	bool islocked_extent_tree = false;
+	int err = 0;
+
+	// get target inode
+	struct inode * inode = ext4_iget(sb, args->in.ino_num, EXT4_IGET_NORMAL);
+	if (IS_ERR(inode)) {
+		return PTR_ERR(inode);
+	}
+
+	// need to ensure inode is extent-based rather than block-based (older)
+	if (!ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS)) {
+		iput(inode);
+		return -EOPNOTSUPP;
+	}
+
+	/* Lock extent tree */
+	down_read(&EXT4_I(inode)->i_data_sem);
+	islocked_extent_tree = true;
+
+	while (count < args->in.max_num_exts) {
+		// find which extent covers <block>, or the next that follows it	
+		// each inode uses an extent tree. Extent is stored at leaf. Path[-1] is leaf
+		path = ext4_find_extent(inode, block, &path, 0);
+		if (IS_ERR(path)) {
+			path = NULL;
+			break;
+		}
+
+		/* Find depth of extent tree */
+		int depth = ext_depth(inode);
+		/* path[depth] is leaf of extree */
+		struct ext4_extent *ex = path[depth].p_ext;	/* p_ext points to extent */
+		if (!ex) {
+			break;	/* no extents */
+		}
+		/* Check if we are looking at the same extent over and over, it means there's no more */
+		if (le32_to_cpu(ex->ee_block) + ext4_ext_get_actual_len(ex) <= block) {
+			break;
+		}
+
+		// construct our custom extent struct
+		args->out.exts[count].start = ((ext4_fsblk_t)le16_to_cpu(ex->ee_start_hi) << 32) |
+					le32_to_cpu(ex->ee_start_lo);
+		args->out.exts[count].length = ext4_ext_get_actual_len(ex);
+		count++;
+
+		/* 
+		Advance block cursor to just past this extent 
+		ext4_find_extent (on next iteration) will find the next extent at or past this block
+		*/ 
+		block = le32_to_cpu(ex->ee_block) + ext4_ext_get_actual_len(ex);
+		// pr_info("evfs: reassigned block to %u\n", block);
+		// // drop buffer head refs but keep path allocated for reuse
+		// ext4_ext_drop_refs(path);
+	}
+
+
+	if (islocked_extent_tree) up_read(&EXT4_I(inode)->i_data_sem);
+
+	if (path) {
+		ext4_ext_drop_refs(path);
+		kfree(path);
+	}
+
+	if (inode) iput(inode);
+
+	args->out.num_exts = count;
+	return err;
 }
 
 long ext4_ioctl_evfs(unsigned int cmd, struct inode * ino, struct super_block * sb, unsigned long arg)
@@ -924,13 +1230,6 @@ long ext4_ioctl_evfs(unsigned int cmd, struct inode * ino, struct super_block * 
 				return -EFAULT;
 
 			return ret;
-		case EXT4_EVFS_ATTR:
-			struct evfs_stat u_stat;
-			ret = evfs_attr(ino, &u_stat);
-			if (copy_to_user((void __user *) arg, &u_stat, sizeof(u_stat)))
-				return -EFAULT;
-
-			return ret;
 		case EXT4_EVFS_BLK_ALLOC:
 			return evfs_block_alloc(ino, sb, (ext4_fsblk_t) arg);
 		case EXT4_EVFS_BLK_FREE:
@@ -939,36 +1238,108 @@ long ext4_ioctl_evfs(unsigned int cmd, struct inode * ino, struct super_block * 
 			return evfs_inode_alloc(sb, (ino_t) arg);
 		case EXT4_EVFS_INO_FREE:
 			return evfs_inode_free(sb, (ino_t) arg);
+		case EXT4_EVFS_INO_READ:
+		{
+			struct evfs_ino_read_args k_args;
+			struct evfs_ino_read_args __user * u_args =
+				(struct evfs_ino_read_args __user *) arg;
+
+			if (copy_from_user(&(k_args.in), &(u_args->in),
+						sizeof(k_args.in)))
+				return -EFAULT;
+			
+			ret = evfs_inode_read(sb, &k_args);
+			if (copy_to_user(&(u_args->out), &(k_args.out),
+						sizeof(k_args.out)))
+				return -EFAULT;
+
+			return ret;
+		}
+		case EXT4_EVFS_INO_RMP:
+		{
+			struct ext4_evfs_ino_rmp_args k_args;
+			struct ext4_evfs_ino_rmp_args __user * u_args =
+				(struct ext4_evfs_ino_rmp_args __user *) arg;
+			if (copy_from_user(&(k_args.in), &(u_args->in), sizeof(k_args.in)))
+				return -EFAULT;
+			
+			size_t ext_arr_size = sizeof(struct ext4_evfs_ext) * u_args->in.num_exts;
+			k_args.in.exts = (struct ext4_evfs_ext *) kmalloc(ext_arr_size, GFP_KERNEL);
+			if (copy_from_user(k_args.in.exts, u_args->in.exts, ext_arr_size))
+				return -EFAULT;
+
+			return evfs_inode_remap(sb, &k_args);
+		}
 		case EXT4_EVFS_DEN_ADD:
-			struct ext4_evfs_de_add_args u_de_add_args;
-			if (copy_from_user(&u_de_add_args, (void __user *) arg, sizeof(u_de_add_args)))
+		{
+			struct ext4_evfs_de_add_args k_args;
+			struct ext4_evfs_de_add_args __user * u_args =
+				(struct ext4_evfs_de_add_args __user *) arg;
+
+			if (copy_from_user(&(k_args.in), &(u_args->in), sizeof(k_args.in)))
 				return -EFAULT;
 
-			return evfs_dentry_add(sb, &u_de_add_args);
+			k_args.in.name[sizeof(k_args.in.name) - 1] = 0;
+			return evfs_dentry_add(sb, &k_args);
+		}
 		case EXT4_EVFS_DEN_READ:
-			struct ext4_evfs_de_read_args u_de_read_args;
-			if (copy_from_user(&u_de_read_args, (void __user *) arg, sizeof(u_de_read_args)))
-				return -EFAULT;
+		{
+			struct ext4_evfs_de_read_args k_args;
+			struct ext4_evfs_de_read_args __user * u_args =
+				(struct ext4_evfs_de_read_args __user *) arg;
 
-			ret = evfs_dentry_read(sb, &u_de_read_args);
-			if (copy_to_user((void __user *) arg, &u_de_read_args, sizeof(u_de_read_args)))
+			if (copy_from_user(&(k_args.in), &(u_args->in),
+						sizeof(k_args.in)))
+				return -EFAULT;
+			
+			ret = evfs_dentry_read(sb, &k_args);
+			if (copy_to_user(&(u_args->out), &(k_args.out),
+						sizeof(k_args.out)))
 				return -EFAULT;
 
 			return ret;
+		}
 		case EXT4_EVFS_DEN_DELETE:
-			struct ext4_evfs_de_delete_args u_de_delete_args;
-			if (copy_from_user(&u_de_delete_args, (void __user *) arg, sizeof(u_de_delete_args)))
+		{
+			struct ext4_evfs_de_delete_args k_args;
+			struct ext4_evfs_de_delete_args __user * u_args =
+				(struct ext4_evfs_de_delete_args __user *) arg;
+			if (copy_from_user(&(k_args.in), &(u_args->in), sizeof(k_args.in)))
 				return -EFAULT;
 
-			ret = evfs_dentry_delete(sb, &u_de_delete_args);
-			return ret;
+			k_args.in.name[sizeof(k_args.in.name) - 1] = 0;
+			return evfs_dentry_delete(sb, &k_args);
+		}
 		case EXT4_EVFS_DEN_UPDATE:
-			struct ext4_evfs_de_update_args u_de_update_args;
-			if (copy_from_user(&u_de_update_args, (void __user *) arg, sizeof(u_de_update_args)))
+		{
+			struct ext4_evfs_de_update_args k_args;
+			struct ext4_evfs_de_update_args __user * u_args =
+				(struct ext4_evfs_de_update_args __user *) arg;
+			if (copy_from_user(&(k_args.in), &(u_args->in), sizeof(k_args.in)))
 				return -EFAULT;
 
-			ret = evfs_dentry_update(sb, &u_de_update_args);
+			ret = evfs_dentry_update(sb, &k_args);
 			return ret;
+		}
+		case EXT4_EVFS_EXT_READ:
+		{
+			struct ext4_evfs_ext_read_args k_args;
+			struct ext4_evfs_ext_read_args __user * u_args =
+				(struct ext4_evfs_ext_read_args __user *) arg;
+			if (copy_from_user(&(k_args.in), &(u_args->in), sizeof(k_args.in)))
+				return -EFAULT;
+			
+			ret = evfs_extent_read(sb, &k_args);
+			if (copy_to_user(&(u_args->out), &(k_args.out), sizeof(k_args.out)))
+				return -EFAULT;
+
+			size_t ext_arr_size = sizeof(struct ext4_evfs_ext) * k_args.out.num_exts;
+			k_args.out.exts = (struct ext4_evfs_ext *) kmalloc(ext_arr_size, GFP_KERNEL);
+			if (copy_to_user(u_args->out.exts, k_args.out.exts, ext_arr_size))
+				return -EFAULT;
+
+			return ret;
+		}
 		default:
 			return -ENOTTY;
 	}

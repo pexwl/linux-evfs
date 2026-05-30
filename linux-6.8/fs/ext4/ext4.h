@@ -2889,6 +2889,14 @@ extern struct buffer_head *
 ext4_find_entry(struct inode *dir, const struct qstr *d_name,
 			struct ext4_dir_entry_2 **res_dir, int *inlined);
 
+// evfs: inode remap
+
+/* extents.c */
+struct ext4_ext_path;
+struct ext4_extent;
+
+extern void ext4_ext_drop_refs(struct ext4_ext_path *path);
+
 /* fast_commit.c */
 int ext4_fc_info_show(struct seq_file *seq, void *v);
 void ext4_fc_init(struct super_block *sb, journal_t *journal);
@@ -3676,10 +3684,6 @@ extern int ext4_check_blockref(const char *, unsigned int,
 extern int ext4_sb_block_valid(struct super_block *sb, struct inode *inode,
 				ext4_fsblk_t start_blk, unsigned int count);
 
-
-/* extents.c */
-struct ext4_ext_path;
-struct ext4_extent;
 
 /*
  * Maximum number of logical blocks in a file; ext4_extent's ee_block is

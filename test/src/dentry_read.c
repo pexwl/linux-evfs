@@ -6,14 +6,14 @@
 #include "helper.h"
 
 int main(int argc, char * argv[]) {
-	if (usage(argc, 4, "dentry_read dir_inode_number target_dentry_index img"))
+	if (usage(argc, 4, "dentry_read dir_ino_num target_dentry_index img"))
 		return 1;
 
-	struct ext4_evfs_de_read_args read_info;
-	memset(&read_info, 0, sizeof(read_info));
+	struct ext4_evfs_de_read_args args;
+	memset(&(args.out), 0, sizeof(args.out));
 
-	read_info.dir_inode_number = atoi(argv[1]);
-	read_info.target_dentry_index = atoi(argv[2]);
+	args.in.dir_ino_num = atoi(argv[1]);
+	args.in.target_dentry_index = atoi(argv[2]);
 
 	char pathname[_TEVFS_EXT4_PATHLEN];
 	null_terminated_strncpy(pathname, argv[3], _TEVFS_EXT4_PATHLEN);
@@ -24,17 +24,17 @@ int main(int argc, char * argv[]) {
 		return 1;
 	}
 
-	if (ioctl(fd, EXT4_EVFS_DEN_READ, &read_info) < 0) {
+	if (ioctl(fd, EXT4_EVFS_DEN_READ, &args) < 0) {
 		perror("ioctl READ_DENTRY");
 		close(fd);
 		return 1;
 	}
 
 	printf("Reading inode %lu directory entry %u\n", 
-		read_info.dir_inode_number, read_info.target_dentry_index);
-	printf("  Inode:	 %u\n", read_info.inode_number);
-	printf("  Name:	  '%s'\n", read_info.name);
-	printf("  Type:	  %u\n", read_info.file_type);
-	printf("  Name len:  %u\n", read_info.name_len);
+		args.in.dir_ino_num, args.in.target_dentry_index);
+	printf("  Inode:	%lu\n", args.out.ino_num);
+	printf("  Name: 	'%s'\n", args.out.name);
+	printf("  Type: 	 %hhu\n", args.out.file_type);
+	printf("  Name len:	%hhu\n", args.out.name_len);
 	return 0;
 }

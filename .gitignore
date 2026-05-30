@@ -4,5 +4,6 @@ tags
 *.swp
 *.swo
 
+edit-*.sh
 test/build/*
 

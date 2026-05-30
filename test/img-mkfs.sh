@@ -11,4 +11,4 @@ if [[ ! -v TEVFS_WORKSPACE ]]; then
     exit 1
 fi
 
-mkfs.ext4 $TEVFS_IMAGEDIR -b 1024 -N $TEVFS_NUM_INODES
+mkfs.ext4 $TEVFS_IMAGEPATH -b 1024 -N $TEVFS_NUM_INODES

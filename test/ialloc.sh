@@ -4,9 +4,9 @@ cd $TEVFS_WORKSPACE
 
 source ./img-var.sh
 
-echo -e "$TEVFS_SIZE $TEVFS_NUM_INODES $TEVFS_IMAGEDIR $TEVFS_MOUNTPT"
-rm -f $TEVFS_IMAGEDIR
-truncate -s $TEVFS_SIZE $TEVFS_IMAGEDIR
+echo -e "$TEVFS_SIZE $TEVFS_NUM_INODES $TEVFS_IMAGEPATH $TEVFS_MOUNTPT"
+rm -f $TEVFS_IMAGEPATH
+truncate -s $TEVFS_SIZE $TEVFS_IMAGEPATH
 
 if ! sudo -E ./img-mkfs.sh; then
     exit 1
@@ -16,9 +16,9 @@ inode_num=55
 
 # let's verify that the node is not valid before we run our program
 echo -e "------ init debugfs check ------"
-sudo -E debugfs -n -R "stat <$inode_num>" $TEVFS_IMAGEDIR | head -n 32
+sudo -E debugfs -n -R "stat <$inode_num>" $TEVFS_IMAGEPATH | head -n 32
 echo -e "--------- init fsck ------------"
-sudo -E fsck.ext4 $TEVFS_IMAGEDIR
+sudo -E fsck.ext4 $TEVFS_IMAGEPATH
 
 if ! sudo -E ./img-mount.sh; then
     exit 1
@@ -26,8 +26,8 @@ fi
 
 read -p "Press enter to continue"
 
-make clean &> /dev/null
-make &> /dev/null
+rm build/ialloc.x
+make build/ialloc.x &> /dev/null
 
 time0=$(date -d "now" "+%s")
 
@@ -38,17 +38,17 @@ if [[ $1 != "--no-unmount" ]]; then
     if ! sudo -E ./img-umount.sh; then
         exit 1
     fi
+else
+    sudo sync # manually sync
 fi
 
-sudo sync # manually sync
-
 echo -e "\n------ new debugfs check ------"
-dfs_res=$(sudo -E debugfs -R "stat <$inode_num>" $TEVFS_IMAGEDIR)
+dfs_res=$(sudo -E debugfs -R "stat <$inode_num>" $TEVFS_IMAGEPATH)
 res=$(echo -e "$dfs_res" | grep atime | awk '{print $4, $5, $6, $7, $8}')
 echo -e "$dfs_res"
 echo -e "\n----- new filesystem check ----"
 # observe what e2fsck do to the disk after inputing no to it
-sudo -E e2fsck -f -n $TEVFS_IMAGEDIR
+sudo -E e2fsck -f -n $TEVFS_IMAGEPATH
 
 echo -e "\n--------- new fsck ------------"
 echo -e "atime: $res"
@@ -61,4 +61,4 @@ else
     echo -e Failed
 fi
 
-# rm $TEVFS_IMAGEDIR
+# rm $TEVFS_IMAGEPATH

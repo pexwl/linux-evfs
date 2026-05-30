@@ -11,7 +11,7 @@ int main(int argc, char * argv[]) {
 
 	
 	unsigned int blk_num;
-	if (str2ul(argv[1], &blk_num, "block_number")) return 1;
+	if (str2u(argv[1], &blk_num, "block_number")) return 1;
 
 	char filename[_TEVFS_EXT4_PATHLEN];
 	null_terminated_strncpy(filename, argv[2], _TEVFS_EXT4_PATHLEN);

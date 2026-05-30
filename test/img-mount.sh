@@ -12,5 +12,5 @@ if [[ ! -v TEVFS_WORKSPACE ]]; then
 fi
 
 mkdir -p $TEVFS_MOUNTPT
-mount -o loop,data=journal $TEVFS_IMAGEDIR $TEVFS_MOUNTPT
+mount -o loop,data=journal $TEVFS_IMAGEPATH $TEVFS_MOUNTPT
 chown code:code $TEVFS_MOUNTPT

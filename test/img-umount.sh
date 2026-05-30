@@ -11,4 +11,4 @@ if [[ ! -v TEVFS_WORKSPACE ]]; then
     exit 1
 fi
 
-umount $TEVFS_IMAGEDIR
+umount $TEVFS_IMAGEPATH
