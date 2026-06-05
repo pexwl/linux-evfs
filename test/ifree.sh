@@ -5,17 +5,25 @@ cd $TEVFS_WORKSPACE
 # allocate the inode first without unmount
 echo -e "=== running ialloc.sh ==="
 ./ialloc.sh --no-unmount
-echo -e "\n=== ialloc.sh exit $? ==="
+ret=$?
+if [[ $ret != 0 ]]; then
+     source ./img-var.sh
+     sudo -E ./img-umount.sh
+fi
+echo -e "\n=== ialloc.sh exit $ret ==="
 
-# exit 0
-read -p "Press enter to continue"
+if [[ $ret != 0 ]]; then
+    exit 1
+fi
+
 source ./img-var.sh
 inode_num=55
 
 rm build/ifree.x
 make build/ifree.x &> /dev/null
 
-echo -e "running build/ifree.x $inode_num $TEVFS_MOUNTPT\n"
+sudo sync
+echo -e "\nrunning build/ifree.x $inode_num $TEVFS_MOUNTPT"
 build/ifree.x $inode_num $TEVFS_MOUNTPT
 echo "exit code: $?"
 

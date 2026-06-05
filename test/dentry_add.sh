@@ -18,12 +18,8 @@ if ! sudo -E ./img-mount.sh; then
     exit 1
 fi
 
-rm build/ialloc.x
 rm build/dentry_add.x
-make build/ialloc.x &> /dev/null
 make build/dentry_add.x &> /dev/null
-
-cino_num=59
 
 dname="parent"
 dir=$TEVFS_MOUNTPT/"$dname"
@@ -33,14 +29,17 @@ pino_num=$(echo -e "$res" | head -n3 | tail -n1 | awk '{print $4}')
 
 fname="child"
 file=$dir/"$fname"
+tmpfile=$TEVFS_MOUNTPT/".$fname"
 
-echo "running build/ialloc.x $cino_num $TEVFS_MOUNTPT"
-build/ialloc.x $cino_num $TEVFS_MOUNTPT
-echo "exit code: $?"
+touch $tmpfile
+res=$(stat "$tmpfile")
+cino_num=$(echo -e "$res" | head -n3 | tail -n1 | awk '{print $4}')
 
 echo "running build/dentry_add.x $fname $pino_num $cino_num $TEVFS_MOUNTPT"
 build/dentry_add.x $fname $pino_num $cino_num $TEVFS_MOUNTPT
 echo "exit code: $?"
+
+rm $tmpfile
 
 if [[ "$1" == "--no-unmount" ]]; then
     exit 0
@@ -57,10 +56,12 @@ echo "$res"
 
 echo ""
 echo "------- new fsck test ---------"
-sudo -E fsck.ext4 $TEVFS_IMAGEPATH
+res2=$(sudo -E fsck.ext4 -f -n $TEVFS_IMAGEPATH)
+echo -e "$res2"
 
 if echo $res | grep "$cino_num is marked in use" > /dev/null; then
     echo OK
 else
     echo Failed
 fi
+

@@ -18,14 +18,14 @@ if ! sudo -E ./img-mount.sh; then
     exit 1
 fi
 
-# add a dentry
 dname="parent"
 fname="child"
 dir=$TEVFS_MOUNTPT/"$dname"
 file=$dir/"$fname"
 
 mkdir $dir
-touch $file
+touch "$file.tmp"
+touch "$file"
 
 sudo sync
 
@@ -34,29 +34,34 @@ pino_num=$(echo -e "$res" | head -n3 | tail -n1 | awk '{print $4}')
 res=$(stat "$file")
 cino_num=$(echo -e "$res" | head -n3 | tail -n1 | awk '{print $4}')
 
-rm build/dentry_delete.x
-make build/dentry_delete.x &> /dev/null
+rm build/dentry_update.x
+make build/dentry_update.x &> /dev/null
 
-echo -e "\nrunning build/dentry_delete.x $pino_num $fname $TEVFS_MOUNTPT"
-build/dentry_delete.x $pino_num $fname $TEVFS_MOUNTPT
+echo -e "\n------ initial: debugfs test ------"
+res=$(sudo -E debugfs -R "ls -p <$pino_num>" $TEVFS_IMAGEPATH)
+echo "$res"
+
+echo -e "\nrunning build/dentry_update.x $pino_num 2 $cino_num $TEVFS_MOUNTPT"
+res=$(build/dentry_update.x $pino_num 2 $cino_num $TEVFS_MOUNTPT)
+echo -e "$res"
 echo "exit code: $?"
 
 if ! sudo -E ./img-umount.sh; then
     exit 1
 fi
 
-echo ""
-echo "------ new debugfs test ------"
+echo -e "\n------ updated: debugfs test ------"
 res=$(sudo -E debugfs -R "ls -p <$pino_num>" $TEVFS_IMAGEPATH)
 echo "$res"
 
-echo ""
-echo "------- new fsck test ---------"
-sudo -E fsck.ext4 -f -n $TEVFS_IMAGEPATH
+echo -e "\n------- new fsck test ---------"
+res2=$(sudo -E fsck.ext4 -f -n $TEVFS_IMAGEPATH)
+echo -e "$res2"
 
-if echo $res | grep "/$cino_num/"  > /dev/null; then
-    echo "Failed"
-else
+c=$(echo -e "$res" | grep $cino_num | wc -l)
+if [[ $c == 2 ]] ; then
     echo "OK"
+else
+    echo "Failed"
 fi
 

@@ -7,7 +7,8 @@ SRC_DIR := src
 BUILD_DIR := build
 
 NAMES = hello iver balloc bfree ialloc ifree iread\
-	dentry_add dentry_read dentry_update dentry_delete
+	dentry_add dentry_read dentry_update dentry_delete\
+	native_extent_swap
 
 TARGETS = $(addprefix $(BUILD_DIR)/, $(NAMES:=.x))
 
@@ -23,5 +24,5 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -rf *.o $(TARGETS)
+	rm -rf build/*.o build/*.x
 

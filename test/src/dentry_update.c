@@ -18,7 +18,7 @@ int main(int argc, char * argv[]) {
 
 	char pathname[_TEVFS_EXT4_PATHLEN];
 	null_terminated_strncpy(pathname, argv[4], _TEVFS_EXT4_PATHLEN);
-	int fd = open("/home/evie/code/evfs-sandbox/fileA", O_RDONLY);
+	int fd = open(pathname, O_RDONLY);
 	if (fd < 0) {
 		perror("open");
 		return 1;

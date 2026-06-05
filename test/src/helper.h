@@ -20,6 +20,21 @@ void null_terminated_strncpy(char * dst, const char * src, size_t n) {
 	dst[n - 1] = 0;
 }
 
+int str2ull(char * str, unsigned long long * num, char * var) {
+	if (str == NULL) return 1;
+	if (num == NULL) return 1;
+
+	char * endptr;
+	*num = strtoull(str, &endptr, 10);
+	
+	if (endptr == str) {
+		if (var != NULL) fprintf(stderr, "invalid %s: %s\n", var, str);
+		return 1;
+	}
+
+	return 0;
+}
+
 int str2ul(char * str, unsigned long * num, char * var) {
 	if (str == NULL) return 1;
 	if (num == NULL) return 1;

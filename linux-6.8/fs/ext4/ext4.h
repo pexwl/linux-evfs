@@ -44,8 +44,9 @@
 
 #include <linux/fscrypt.h>
 #include <linux/fsverity.h>
-
 #include <linux/compiler.h>
+
+#include "evfs-bmt.h"
 
 /*
  * The fourth extended filesystem constants/structures
@@ -1753,6 +1754,9 @@ struct ext4_sb_info {
 	int s_fc_debug_max_replay;
 #endif
 	struct ext4_fc_replay_state s_fc_replay_state;
+
+	/* evfs: inode tracker */
+	struct evfs_bm_tracker * s_inode_tracker;
 };
 
 static inline struct ext4_sb_info *EXT4_SB(struct super_block *sb)

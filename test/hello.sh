@@ -25,8 +25,6 @@ make build/hello.x &> /dev/null
 echo "Running build/hello.x $TEVFS_MOUNTPT"
 build/hello.x $TEVFS_MOUNTPT
 
-sleep 1 # add some delay to wait for printk buffer flushed
-
 if dmesg | grep "bad apple" > /dev/null; then
     echo "OK"
 else

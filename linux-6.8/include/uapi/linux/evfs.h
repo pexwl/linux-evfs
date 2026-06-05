@@ -133,7 +133,7 @@ struct ext4_evfs_ext_read_args
 	} out;
 };
 
-struct ext4_evfs_ino_rmp_args
+struct ext4_evfs_ext_mv_args
 {
 	struct {
 		unsigned long ino_num;
@@ -151,12 +151,12 @@ struct ext4_evfs_ino_rmp_args
 #define EXT4_EVFS_INO_ALLOC _IO('f', 103)
 #define EXT4_EVFS_INO_FREE _IO('f', 104)
 #define EXT4_EVFS_INO_READ _IOWR('f', 105, struct evfs_ino_read_args)
-#define EXT4_EVFS_INO_RMP _IOW('f', 106, struct ext4_evfs_ino_rmp_args)
-#define EXT4_EVFS_DEN_ADD _IOW('f', 107, struct ext4_evfs_de_add_args)
-#define EXT4_EVFS_DEN_READ _IOWR('f', 108, struct ext4_evfs_de_read_args)
-#define EXT4_EVFS_DEN_DELETE _IOW('f', 109, struct ext4_evfs_de_delete_args)
-#define EXT4_EVFS_DEN_UPDATE _IOW('f', 110, struct ext4_evfs_de_update_args)
-#define EXT4_EVFS_EXT_READ _IOWR('f', 111, struct ext4_evfs_ext_read_args)
+#define EXT4_EVFS_DEN_ADD _IOW('f', 106, struct ext4_evfs_de_add_args)
+#define EXT4_EVFS_DEN_READ _IOWR('f', 107, struct ext4_evfs_de_read_args)
+#define EXT4_EVFS_DEN_DELETE _IOW('f', 108, struct ext4_evfs_de_delete_args)
+#define EXT4_EVFS_DEN_UPDATE _IOW('f', 109, struct ext4_evfs_de_update_args)
+#define EXT4_EVFS_EXT_READ _IOWR('f', 110, struct ext4_evfs_ext_read_args)
+#define EXT4_EVFS_EXT_MV _IOW('f', 111, struct ext4_evfs_ext_mv_args)
 
 #endif
 

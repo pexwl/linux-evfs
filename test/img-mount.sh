@@ -12,5 +12,12 @@ if [[ ! -v TEVFS_WORKSPACE ]]; then
 fi
 
 mkdir -p $TEVFS_MOUNTPT
-mount -o loop,data=journal $TEVFS_IMAGEPATH $TEVFS_MOUNTPT
+
+if [[ $1 == "--no-data-journaling" ]]; then
+	mount -o loop,data=writeback $TEVFS_IMAGEPATH $TEVFS_MOUNTPT
+else
+	mount -o loop,data=journal $TEVFS_IMAGEPATH $TEVFS_MOUNTPT
+fi
+
 chown code:code $TEVFS_MOUNTPT
+
