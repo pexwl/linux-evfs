@@ -2893,13 +2893,32 @@ extern struct buffer_head *
 ext4_find_entry(struct inode *dir, const struct qstr *d_name,
 			struct ext4_dir_entry_2 **res_dir, int *inlined);
 
-// evfs: inode remap
-
 /* extents.c */
 struct ext4_ext_path;
 struct ext4_extent;
 
+/* evfs: extent move begins */
+extern int __ext4_ext_dirty(const char *where, unsigned int line,
+			    handle_t *handle, struct inode *inode,
+			    struct ext4_ext_path *path);
+
+#ifndef ext4_ext_dirty
+#define ext4_ext_dirty(handle, inode, path) \
+		__ext4_ext_dirty(__func__, __LINE__, (handle), (inode), (path))
+#endif
+
+extern inline int
+ext4_force_split_extent_at(handle_t *handle, struct inode *inode,
+			   struct ext4_ext_path **ppath, ext4_lblk_t lblk,
+			   int nofail);
+
+extern void ext4_ext_try_to_merge(handle_t *handle,
+				  struct inode *inode,
+				  struct ext4_ext_path *path,
+				  struct ext4_extent *ex);
+
 extern void ext4_ext_drop_refs(struct ext4_ext_path *path);
+/* evfs: extent move ends */
 
 /* fast_commit.c */
 int ext4_fc_info_show(struct seq_file *seq, void *v);

@@ -6,7 +6,7 @@
 #include "helper.h"
 
 int main(int argc, char * argv[]) {
-	if (usage(argc, 5, "extent_swap start len forig fdonr"))
+	if (usage(argc, 5, "extent_move.native start len forig fdonr"))
 		return 1;
 
 	struct move_extent me;
@@ -36,9 +36,6 @@ int main(int argc, char * argv[]) {
 
 	me.donor_fd = fd_donr;
 
-	fsync(fd_orig);
-	fsync(fd_donr);
-
 	// call ioctl
 	if (ioctl(fd_orig, EXT4_IOC_MOVE_EXT, &me) < 0) {
 		perror("ioctl MOVE_EXT");
@@ -48,12 +45,6 @@ int main(int argc, char * argv[]) {
 	}
 
 	printf("EXTENT SWAPPED >> MOVED: %llu\n", me.moved_len);
-
-	int ret1 = posix_fadvise(fd_orig, 0, 0, POSIX_FADV_DONTNEED);
-	int ret2 = posix_fadvise(fd_donr, 0, 0, POSIX_FADV_DONTNEED);
-
-	printf("posix_fadvise fd_orig returned %d\n", ret1);
-	printf("posix_fadvise fd_donr returned %d\n", ret2);
 
 	close(fd_orig);
 	close(fd_donr);

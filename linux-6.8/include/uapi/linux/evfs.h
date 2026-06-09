@@ -46,10 +46,6 @@ typedef struct evfs_ino_read_out evfs_stat;
 #define EXT4_NAME_LEN 255
 #endif
 
-#ifndef MAX_EXT4_EXTENTS
-#define MAX_EXT4_EXTENTS 128
-#endif
-
 // dentry operation params and/or return values
 struct ext4_evfs_de_add_args
 {
@@ -117,8 +113,9 @@ struct ext4_evfs_fsp_iter_args
 
 struct ext4_evfs_ext
 {
-	unsigned long long start;
-	unsigned int length;
+	unsigned int log_start;
+	unsigned long long phy_start;
+	unsigned int len;
 };
 
 struct ext4_evfs_ext_read_args
@@ -137,8 +134,8 @@ struct ext4_evfs_ext_mv_args
 {
 	struct {
 		unsigned long ino_num;
-		struct ext4_evfs_ext * exts;
-		unsigned int num_exts;
+		unsigned long long exp_iver;
+		struct ext4_evfs_ext ext;
 	} in;
 	struct {} out;
 	

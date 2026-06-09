@@ -12,7 +12,7 @@ void get_time(time_t time, size_t fmt_time_len, char * fmt_time) {
 }
 
 int main(int argc, char * argv[]) {
-	if (usage(argc, 3, "getattr ino_num img"))
+	if (usage(argc, 3, "iread ino_num img"))
 		return 1;
 
 	unsigned long iindex;

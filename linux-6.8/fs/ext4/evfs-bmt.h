@@ -12,7 +12,8 @@ typedef enum evfs_bitop_type
 {
 	EBO_VOID,
 	EBO_BOOL
-} evfs_bitop_type;
+}
+evfs_bitop_type;
 
 typedef struct evfs_bitop
 {
@@ -21,7 +22,8 @@ typedef struct evfs_bitop
 		evfs_bitop_v op_v;
 		evfs_bitop_b op_b;
 	};
-} evfs_bitop;
+}
+evfs_bitop;
 
 struct evfs_bitmap
 {

@@ -1,8 +1,17 @@
+/**
+ * evfs interface for EXT4
+ */
+
+// TODO: increment i_version in any evfs functions that
+// ----: modify inode metadata
+// TODO: add block tracker, similar to how we track inode
+
 #include <linux/types.h>
 #include <linux/bitops.h>
 #include <linux/string.h>
 #include <linux/fs.h>
 #include <linux/quotaops.h>
+#include <linux/iversion.h>
 #include "ext4.h"
 #include "ext4_jbd2.h"
 #include "ext4_extents.h"
@@ -60,6 +69,138 @@ static long __evfs_inode_untrack_nolock(struct inode * ino)
 	ebitop.type = EBO_VOID;
 	ebitop.op_v = clear_bit;
 	return evfs_bit_wrapper(sbi->s_inode_tracker, &ebitop, ino->i_ino);
+}
+
+/**
+ * @breif helper to swap extent
+ * PRE-COND:
+ * - curr extent contains the extent to process
+ *
+ * POST-COND:
+ * - curr extent contains the valid logical range and the
+ *   physical blocks that are swapped out
+ * - next extent is updated to the next range to iterate
+ */
+static long __evfs_extent_map(handle_t * handle, struct inode * inode,
+				struct ext4_evfs_ext * curr, struct ext4_evfs_ext * next)
+{
+	int ret = 0, err = 0;
+	struct ext4_ext_path * path = NULL;
+	unsigned int len = curr->len;
+	ext4_lblk_t lblk = curr->log_start;
+
+	// invalidate extent status tree
+	ext4_es_remove_extent(inode, lblk, len);
+	bool done = false;
+	while (!done) {
+		path = ext4_find_extent(inode, lblk, NULL, EXT4_EX_NOCACHE);
+		if (IS_ERR(path)) {
+			ret = PTR_ERR(path);
+			goto term;
+		}
+
+		struct ext4_extent * ex = path[path->p_depth].p_ext;
+		if (!ex) {
+			ret = -ENOENT;
+			goto term;
+		}
+
+		ext4_lblk_t e_blk = le32_to_cpu(ex->ee_block);
+		unsigned int e_len = ext4_ext_get_actual_len(ex);
+
+		// DONE: handle holes
+		// if before the hole, move the cursor to the current
+		// hole, if the cursor is after the hole, move the cursor
+		// to the next extent.
+		if (lblk < e_blk) {
+			lblk = e_blk;
+			goto cont;
+		} else if (lblk >= e_blk + e_len) {
+			lblk = ext4_ext_next_allocated_block(path);
+			if (lblk >= EXT_MAX_BLOCKS) {
+				ret = -ENOENT;
+				goto term;
+			}
+
+			goto cont;
+		}
+
+		// get to the next length
+		len = curr->log_start + len - lblk;
+
+		// DONE: split bc the ext physical blk can be in other state
+		// ----: (e.g. uninitialized), or the next ext physical blk is
+		// ----: is not in the range of the curr physical blocks (very
+		// ----: likely)
+		// check where the left and right boundary is and initiate
+		// the split; if split, find the extent again.
+		if (e_blk < lblk) {
+			if ((err = ext4_force_split_extent_at(handle, inode, &path, lblk, 0))) {
+				ret = err;
+				goto term;
+			}
+
+			goto cont;
+		}
+
+		// DEBUG: assert(lblk == e_blk);
+		// the specified extent endpoint goes beyond current extent
+		if (e_blk + e_len < lblk + len) len = e_blk + e_len - lblk;
+
+		// the specified extent endpoint doesn't cover current extent
+		if (e_blk + e_len > lblk + len) {
+			if ((err = ext4_force_split_extent_at(handle, inode, &path, lblk + len, 0))) {
+				ret = err;
+				goto term;
+			}
+
+			goto cont;
+		}
+
+		curr->phy_start += lblk - curr->log_start;
+		curr->log_start = lblk;
+		curr->len = len;
+
+		// DONE: swap the extent block
+		unsigned long long tmp = ext4_ext_pblock(ex);
+		ext4_ext_store_pblock(ex, curr->phy_start);
+		curr->phy_start = tmp;
+
+		// DONE: try merging the extent
+		ext4_ext_try_to_merge(handle, inode, path, ex);
+
+		// DONE: mark the extent as dirty
+		if ((err = ext4_ext_dirty(handle, inode, &(path[path->p_depth])))) {
+			ret = err;
+			goto term;
+		}
+
+		goto set_next;
+
+		term:
+		memset(curr, 0, sizeof(struct ext4_evfs_ext));
+		goto finish;
+
+		set_next:
+		if (lblk + curr->len > e_blk + e_len) {
+			// specified extent endpoint goes beyond current
+			// extent endpoint
+			next->phy_start += e_len;
+			next->log_start = e_blk + e_len;
+			next->len = lblk + curr->len - next->log_start;
+		} else {
+			finish:
+			memset(next, 0, sizeof(struct ext4_evfs_ext));
+		}
+
+		done = true;
+
+		cont:
+		ext4_free_ext_path(path);
+		path = NULL;
+	}
+
+	return (long) ret;
 }
 
 // core evfs functions
@@ -303,6 +444,46 @@ out:
 	return (long) ret;
 }
 
+long evfs_fspace_iter(struct super_block * sb, struct ext4_evfs_fsp_iter_args * args)
+{
+	__u64 found_start = 0;
+	__u64 found_length = 0;
+	__u64 total_blocks = ext4_blocks_count(EXT4_SB(sb)->s_es);
+	int in_free_extent = 0;
+
+	for (__u64 b = args->in.start; b <= total_blocks; b++) {
+		ext4_group_t group;
+		ext4_grpblk_t offset;
+		ext4_get_group_no_and_offset(sb, b, &group, &offset);
+
+		struct buffer_head *bitmap_bh = ext4_read_block_bitmap(sb, group);
+		// found unreadable blocks
+		if (IS_ERR_OR_NULL(bitmap_bh)) {
+			// assume current free extent stops right before unreadable blocks
+			if (in_free_extent) break;
+			// otherwise, continue checking for free extents after unreadable blocks
+			continue;
+		}
+
+		int is_free = !ext4_test_bit(offset, bitmap_bh->b_data);
+		brelse(bitmap_bh);
+
+		if (is_free) {
+			if (!in_free_extent) {
+				found_start = b;
+				in_free_extent = 1;
+			}
+			found_length++;
+		} else if (in_free_extent) {
+			break;
+		}
+	}
+
+	args->out.block = found_start;
+	args->out.length = found_length;
+	return 0;
+}
+
 /**
  * @brief inode statistics with version
  * This is a kernel helper and/or a function hence we don't copy to
@@ -349,46 +530,6 @@ long evfs_inode_read(struct super_block * sb, struct evfs_ino_read_args * args)
 
 out:
 	return (long) ret; 
-}
-
-long evfs_fspace_iter(struct super_block * sb, struct ext4_evfs_fsp_iter_args * args)
-{
-	__u64 found_start = 0;
-	__u64 found_length = 0;
-	__u64 total_blocks = ext4_blocks_count(EXT4_SB(sb)->s_es);
-	int in_free_extent = 0;
-
-	for (__u64 b = args->in.start; b <= total_blocks; b++) {
-		ext4_group_t group;
-		ext4_grpblk_t offset;
-		ext4_get_group_no_and_offset(sb, b, &group, &offset);
-
-		struct buffer_head *bitmap_bh = ext4_read_block_bitmap(sb, group);
-		// found unreadable blocks
-		if (IS_ERR_OR_NULL(bitmap_bh)) {
-			// assume current free extent stops right before unreadable blocks
-			if (in_free_extent) break;
-			// otherwise, continue checking for free extents after unreadable blocks
-			continue;
-		}
-
-		int is_free = !ext4_test_bit(offset, bitmap_bh->b_data);
-		brelse(bitmap_bh);
-
-		if (is_free) {
-			if (!in_free_extent) {
-				found_start = b;
-				in_free_extent = 1;
-			}
-			found_length++;
-		} else if (in_free_extent) {
-			break;
-		}
-	}
-
-	args->out.block = found_start;
-	args->out.length = found_length;
-	return 0;
 }
 
 /** 
@@ -748,7 +889,7 @@ long evfs_dentry_add(struct super_block * sb, struct ext4_evfs_de_add_args * arg
 	qname.len = strlen(args->in.name);
 	qname.hash = full_name_hash(parent_dentry, qname.name, qname.len);
 
-	if (unlikely(IS_CASEFOLDED(dir_inode))) {
+	if (IS_CASEFOLDED(dir_inode)) {
 		sb->s_d_op->d_hash(parent_dentry, &qname);
 	}
 
@@ -913,7 +1054,7 @@ long evfs_dentry_delete(struct super_block * sb, struct ext4_evfs_de_delete_args
 	qname.len = strlen(args->in.name);
 	qname.hash = full_name_hash(parent_dentry, qname.name, qname.len);
 
-	if (unlikely(IS_CASEFOLDED(dir_inode))) {
+	if (IS_CASEFOLDED(dir_inode)) {
 		sb->s_d_op->d_hash(parent_dentry, &qname);
 	}
 
@@ -1135,6 +1276,7 @@ release_pino:
 	return (long) err;
 }
 
+// TODO: add support to read out extents from the index-based inode
 long evfs_extent_read(struct super_block * sb, struct ext4_evfs_ext_read_args * args)
 {
 	struct ext4_ext_path *path = NULL;
@@ -1147,12 +1289,6 @@ long evfs_extent_read(struct super_block * sb, struct ext4_evfs_ext_read_args * 
 	struct inode * inode = ext4_iget(sb, args->in.ino_num, EXT4_IGET_NORMAL);
 	if (IS_ERR(inode)) {
 		return PTR_ERR(inode);
-	}
-
-	// need to ensure inode is extent-based rather than block-based (older)
-	if (!ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS)) {
-		iput(inode);
-		return -EOPNOTSUPP;
 	}
 
 	/* Lock extent tree */
@@ -1181,19 +1317,12 @@ long evfs_extent_read(struct super_block * sb, struct ext4_evfs_ext_read_args * 
 		}
 
 		// construct our custom extent struct
-		args->out.exts[count].start = ((ext4_fsblk_t)le16_to_cpu(ex->ee_start_hi) << 32) |
-					le32_to_cpu(ex->ee_start_lo);
-		args->out.exts[count].length = ext4_ext_get_actual_len(ex);
+		args->out.exts[count].log_start = le32_to_cpu(ex->ee_block);
+		args->out.exts[count].phy_start = ext4_ext_pblock(ex);
+		args->out.exts[count].len = ext4_ext_get_actual_len(ex);
 		count++;
 
-		/* 
-		Advance block cursor to just past this extent 
-		ext4_find_extent (on next iteration) will find the next extent at or past this block
-		*/ 
-		block = le32_to_cpu(ex->ee_block) + ext4_ext_get_actual_len(ex);
-		// pr_info("evfs: reassigned block to %u\n", block);
-		// // drop buffer head refs but keep path allocated for reuse
-		// ext4_ext_drop_refs(path);
+		block = args->out.exts[count].log_start + args->out.exts[count].len;
 	}
 
 
@@ -1210,117 +1339,85 @@ long evfs_extent_read(struct super_block * sb, struct ext4_evfs_ext_read_args * 
 	return err;
 }
 
+/**
+ * @brief extent move
+ *
+ * ASSUMPTION:
+ * ----: Before: Allocate blocks that no-one uses
+ * ----: After: Free or map those blocks to existing inode
+ *
+ * NOTE: see fs/ext4/extents.c:ext4_move_extent for how data is copied
+ * NOTE: see fs/ext4/extents.c:ext4_swap_extent for how extent is swapped
+ * TODO: ask prof if we're doing pure swap or enable insertion?
+ * ----: if insertion needs to be enabled: compute the number
+ * ----: of blocks to be added
+ * NOTE: since we're 'replacing', we do pure swap for now
+ * TODO: enable outputing the old extents so user space know which blocks
+ * ----: to release
+ * TODO: add support for indexed based inode
+ *
+ */
 long evfs_extent_move(struct super_block * sb, struct ext4_evfs_ext_mv_args * args)
 {
-	// TODO?: refer to exisiting IOCTL 'EXT4_IOC_MOVE_EXT'
-	// TODO?: see fs/ext4/ioctl.c:1333
-	struct inode *target_inode = NULL;
-	bool inode_locked = false;
-	bool ext_tree_locked = false;
+	struct inode * inode;
 	handle_t *handle = NULL;
-	int err = 0;
+	int ret = 0, err;
 
 	/* User array of new extents */
-	if (args->in.num_exts == 0 || args->in.num_exts > MAX_EXT4_EXTENTS) {
-		err = -EINVAL;
-		pr_warn("evfs: Invalid number of extents: %d\n", args->in.num_exts);
-		goto inode_remap_out;
+	inode = ext4_iget(sb, args->in.ino_num, EXT4_IGET_NORMAL); 
+	if (IS_ERR(inode)) {
+		ret = PTR_ERR(inode);
+		goto out;
+	}
+	inode_lock(inode);
+	down_write(&EXT4_I(inode)->i_data_sem);
+
+	unsigned long long iver;
+	evfs_iver(inode, &iver);
+	if (iver != args->in.exp_iver) {
+		ret = -EAGAIN;
+		goto release_inode;
 	}
 
-	target_inode = ext4_iget(sb, args->in.ino_num, EXT4_IGET_NORMAL); 
-	if (IS_ERR(target_inode)) {
-		err = PTR_ERR(target_inode);
-		goto inode_remap_out;
-	}
-
-	if (!ext4_test_inode_flag(target_inode, EXT4_INODE_EXTENTS)) {
-		err = -EOPNOTSUPP;
-		goto inode_remap_out;
-	}
-
-	/* Affect up to 10 blocks */
-	handle = ext4_journal_start(target_inode, EXT4_HT_MISC, 10);
+	int credits = ext4_writepage_trans_blocks(inode);
+	handle = ext4_journal_start(inode, EXT4_HT_MOVE_EXTENTS, credits);
 	if (IS_ERR(handle)) {
-		err = PTR_ERR(handle);
-		goto inode_remap_out;
+		ret = PTR_ERR(handle);
+		goto release_inode;
 	}
 
-	inode_lock(target_inode);	/* lock inode */
-	inode_locked = true;
-	down_write(&EXT4_I(target_inode)->i_data_sem);	/* lock extent tree with rw semaphore */
-	ext_tree_locked = true;
+	// DONE: Wait for all existing direct I/O workers
+	inode_dio_wait(inode);
 
-	/* Prevent new writes during page invalidation */
-	filemap_write_and_wait(&target_inode->i_data);
+	struct ext4_evfs_ext next, ccurr;
+	struct ext4_evfs_ext curr = args->in.ext;
+	memcpy(&ccurr, &curr, sizeof(struct ext4_evfs_ext)); //create a copy
 
-	/* Invalidate stale page cache */
-	invalidate_inode_pages2(target_inode->i_mapping);
-
-	/* TODO?: Remove all existing extents */
-	err = ext4_ext_remove_space(target_inode, 0, EXT_MAX_BLOCKS - 1);
-	if (err) {
-		pr_warn("evfs: ext4_ext_remove_space failed: %d\n", err);
-		goto inode_remap_out;
+	repeat:
+	if ((err = __evfs_extent_map(handle, inode, &ccurr, &next))) {
+		ret = err;
+		goto stop_journal;
 	}
 
-	/* Inode removed of its data; set size to 0 */
-	target_inode->i_size = 0;
+	// TODO: copy data
 
-	ext4_lblk_t logical_block = 0;	/* Logical block that each new extent starts from */
-	for (int i = 0; i < args->in.num_exts; i++) {
-		/* Insert new extent at logical block 0 */
-		struct ext4_extent new_extent;
-		new_extent.ee_block = cpu_to_le32(logical_block);
-		new_extent.ee_len = cpu_to_le16(args->in.exts[i].length);
-		new_extent.ee_start_hi = cpu_to_le16(args->in.exts[i].start >> 32);
-		new_extent.ee_start_lo = cpu_to_le32(args->in.exts[i].start & 0xffffffffULL);
-
-		struct ext4_ext_path *path = NULL;
-		path = ext4_find_extent(target_inode, logical_block, &path, 0);
-		if (IS_ERR(path)) {
-			err = PTR_ERR(path);
-			path = NULL;
-			goto inode_remap_out;
-		}
-
-		err = ext4_ext_insert_extent(handle, target_inode, &path, &new_extent, 0);
-		if (path) {
-			ext4_ext_drop_refs(path);
-			kfree(path);
-		}
-		if (err) {
-			pr_warn("evfs: ext4_ext_insert_extent failed: %d\n", err);
-			goto inode_remap_out;
-		}
-
-		/* update inode size and mark dirty */
-		target_inode->i_size += (loff_t)(args->in.exts[i].length) * sb->s_blocksize;
-
-		/* Update starting logical block for the next extent */
-		logical_block += args->in.exts[i].length;
+	if (next.len != 0) {
+		memcpy(&ccurr, &next, sizeof(struct ext4_evfs_ext));
+		goto repeat;
 	}
 	
-	err = ext4_mark_inode_dirty(handle, target_inode);
-	if (err) {
-		goto inode_remap_out;
+stop_journal:
+	if ((err = ext4_journal_stop(handle))) {
+		ret = err;
 	}
 
-	ext4_journal_stop(handle);
-	handle = NULL;  /* already stopped, don't stop again in cleanup */
-	write_inode_now(target_inode, 1);  /* 1 = wait for completion */
+release_inode:
+	up_write(&EXT4_I(inode)->i_data_sem);
+	inode_unlock(inode);
+	iput(inode);
 
-inode_remap_out:
-	if (!IS_ERR_OR_NULL(target_inode)) {
-		if (ext_tree_locked) up_write(&EXT4_I(target_inode)->i_data_sem);
-		if (inode_locked) inode_unlock(target_inode);
-	}
-	if (!IS_ERR_OR_NULL(handle)) {
-		ext4_journal_stop(handle);
-	}
-	if (!IS_ERR_OR_NULL(target_inode)) {
-		iput(target_inode);
-	}
-	return err;
+out:
+	return (long) ret;
 }
 
 long ext4_ioctl_evfs(unsigned int cmd, struct inode * ino, struct super_block * sb, unsigned long arg)
@@ -1439,14 +1536,11 @@ long ext4_ioctl_evfs(unsigned int cmd, struct inode * ino, struct super_block * 
 			if (copy_from_user(&(k_args.in), &(u_args->in), sizeof(k_args.in)))
 				return -EFAULT;
 			
-			size_t ext_arr_size = sizeof(struct ext4_evfs_ext) * u_args->in.num_exts;
-			k_args.in.exts = (struct ext4_evfs_ext *) kmalloc(ext_arr_size, GFP_KERNEL);
-			if (copy_from_user(k_args.in.exts, u_args->in.exts, ext_arr_size))
-				return -EFAULT;
-
-			return evfs_extent_move(sb, &k_args);
+			ret = evfs_extent_move(sb, &k_args);
+			return ret;
 		}
 		default:
 			return -ENOTTY;
 	}
 }
+

@@ -176,13 +176,14 @@ static int ext4_ext_get_access(handle_t *handle, struct inode *inode,
 	return err;
 }
 
+/* evfs.c:extent_map */
 /*
  * could return:
  *  - EROFS
  *  - ENOMEM
  *  - EIO
  */
-static int __ext4_ext_dirty(const char *where, unsigned int line,
+int __ext4_ext_dirty(const char *where, unsigned int line,
 			    handle_t *handle, struct inode *inode,
 			    struct ext4_ext_path *path)
 {
@@ -204,8 +205,10 @@ static int __ext4_ext_dirty(const char *where, unsigned int line,
 	return err;
 }
 
+#ifndef ext4_ext_dirty
 #define ext4_ext_dirty(handle, inode, path) \
 		__ext4_ext_dirty(__func__, __LINE__, (handle), (inode), (path))
+#endif
 
 static ext4_fsblk_t ext4_ext_find_goal(struct inode *inode,
 			      struct ext4_ext_path *path,
@@ -323,7 +326,8 @@ static inline int ext4_ext_space_root_idx(struct inode *inode, int check)
 	return size;
 }
 
-static inline int
+/* evfs.c:extent_map */
+inline int
 ext4_force_split_extent_at(handle_t *handle, struct inode *inode,
 			   struct ext4_ext_path **ppath, ext4_lblk_t lblk,
 			   int nofail)
@@ -1880,12 +1884,12 @@ static void ext4_ext_try_to_merge_up(handle_t *handle,
 	ext4_free_blocks(handle, inode, NULL, blk, 1,
 			 EXT4_FREE_BLOCKS_METADATA | EXT4_FREE_BLOCKS_FORGET);
 }
-
+/* evfs.c:extent_map */
 /*
  * This function tries to merge the @ex extent to neighbours in the tree, then
  * tries to collapse the extent tree into the inode.
  */
-static void ext4_ext_try_to_merge(handle_t *handle,
+void ext4_ext_try_to_merge(handle_t *handle,
 				  struct inode *inode,
 				  struct ext4_ext_path *path,
 				  struct ext4_extent *ex)
