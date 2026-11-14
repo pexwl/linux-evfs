@@ -152,7 +152,8 @@ int ext4_datasem_ensure_credits(handle_t *handle, struct inode *inode,
  *  - EROFS
  *  - ENOMEM
  */
-static int ext4_ext_get_access(handle_t *handle, struct inode *inode,
+/* evfs.c:extent_map */
+int ext4_ext_get_access(handle_t *handle, struct inode *inode,
 				struct ext4_ext_path *path)
 {
 	int err = 0;

@@ -1,14 +1,12 @@
 #!/bin/bash
 
-export TEVFS_WORKSPACE=$(dirname "$0")
-cd $TEVFS_WORKSPACE
+cd $(dirname "$0")
 
-source ./img-var.sh
+source img-var.sh
 
 echo "$TEVFS_SIZE $TEVFS_NUM_INODES $TEVFS_IMAGEPATH $TEVFS_MOUNTPT"
 rm -f $TEVFS_IMAGEPATH
 
-truncate -s $TEVFS_SIZE $TEVFS_IMAGEPATH
 
 if ! sudo -E ./img-mkfs.sh; then
     exit 1
@@ -45,7 +43,7 @@ if [[ "$1" == "--no-unmount" ]]; then
     exit 0
 fi
 
-if ! sudo -E ./img-umount.sh; then
+if ! sudo -E ./img-unmount.sh; then
     exit 1
 fi
 

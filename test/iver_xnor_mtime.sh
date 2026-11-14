@@ -1,6 +1,5 @@
 #!/bin/bash
-export TEVFS_WORKSPACE=$(dirname "$0")
-cd $TEVFS_WORKSPACE
+cd $(dirname "$0")
 
 source ./img-var.sh
 
@@ -32,6 +31,7 @@ for ((i=0; i<256; i++)); do
 	rand=$RANDOM
 	op=$(expr $rand % 4)
 	if [[ $op == 0 ]]; then
+		# echo "echo $rand >> $file"
 		echo $rand >> $file
 	elif [[ $op == 1 ]]; then
 		# make sure truncated size is different
@@ -41,15 +41,16 @@ for ((i=0; i<256; i++)); do
 			curr_trc_sz=$RANDOM
 		done
 		prev_trc_sz=$curr_trc_sz
+		# echo "truncate -s $curr_trc_sz $file"
 		truncate -s $curr_trc_sz $file
 	elif [[ $op == 2 ]]; then
+		# echo "mv $file $TEVFS_MOUNTPT/$rand"
 		mv $file "$TEVFS_MOUNTPT/$rand"
 		file="$TEVFS_MOUNTPT/$rand"
 	fi
 
 	sudo sync
 	
-
 	curr_mtime=$(ls --full-time $file | tail -n1 | awk '{print $7,$8}' )
 	curr_ver=$(build/iver.x $file)
 	
@@ -76,6 +77,6 @@ else
 	echo "curr: (ver) $curr_ver, (mtime) $curr_mtime"
 fi
 
-if ! sudo -E ./img-umount.sh; then
+if ! sudo -E ./img-unmount.sh; then
     exit 1
 fi

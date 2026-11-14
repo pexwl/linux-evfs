@@ -6,17 +6,15 @@ if (($EUID != 0)); then
     exit 1
 fi
 
-if [[ ! -v TEVFS_WORKSPACE ]]; then
-    echo "workspace check fail"
-    exit 1
-fi
-
 mkdir -p $TEVFS_MOUNTPT
 
-if [[ $1 == "--no-data-journaling" ]]; then
-	mount -o loop,data=writeback $TEVFS_IMAGEPATH $TEVFS_MOUNTPT
+losetup /dev/loop0 $TEVFS_IMAGEPATH
+if [[ $1 == "--writeback" ]]; then
+	mount -t ext4 -o data=writeback /dev/loop0 $TEVFS_MOUNTPT
+elif [[ $1 == "--ordered" ]]; then
+	mount -t ext4 -o data=ordered /dev/loop0 $TEVFS_MOUNTPT
 else
-	mount -o loop,data=journal $TEVFS_IMAGEPATH $TEVFS_MOUNTPT
+	mount -t ext4 -o data=journal /dev/loop0 $TEVFS_MOUNTPT
 fi
 
 chown code:code $TEVFS_MOUNTPT

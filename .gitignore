@@ -3,7 +3,12 @@ tags
 *.o
 *.swp
 *.swo
+*.vim
 
-edit-*.sh
+edit*.sh
 test/build/*
+
+install.sh
+build.sh
+sync-test.sh
 

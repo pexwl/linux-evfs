@@ -1,0 +1,6 @@
+config FS_EVFS
+    bool "Extended VFS"
+    default n
+    help
+        Enable Extended VFS
+

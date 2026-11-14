@@ -1,14 +1,12 @@
 #!/bin/bash
 
-export TEVFS_WORKSPACE=$(dirname "$0")
-cd $TEVFS_WORKSPACE
+cd $(dirname "$0")
 
 source img-var.sh
 
 echo "$TEVFS_SIZE $TEVFS_NUM_INODES $TEVFS_IMAGEPATH $TEVFS_MOUNTPT"
 rm -f $TEVFS_IMAGEPATH
 
-truncate -s $TEVFS_SIZE $TEVFS_IMAGEPATH
 
 if ! sudo -E ./img-mkfs.sh; then
     exit 1
@@ -46,9 +44,12 @@ res=$(build/dentry_update.x $pino_num 2 $cino_num $TEVFS_MOUNTPT)
 echo -e "$res"
 echo "exit code: $?"
 
-if ! sudo -E ./img-umount.sh; then
-    exit 1
-fi
+# if ! sudo -E ./img-unmount.sh; then
+#     exit 1
+# fi
+
+sudo sync
+echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null
 
 echo -e "\n------ updated: debugfs test ------"
 res=$(sudo -E debugfs -R "ls -p <$pino_num>" $TEVFS_IMAGEPATH)

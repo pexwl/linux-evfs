@@ -6,11 +6,8 @@ CFLAGS = -g -Wall -Werror
 SRC_DIR := src
 BUILD_DIR := build
 
-NAMES = hello iver balloc bfree ialloc ifree iread\
-	dentry_add dentry_read dentry_update dentry_delete\
-	extent_move.n extent_move.c
-
-TARGETS = $(addprefix $(BUILD_DIR)/, $(NAMES:=.x))
+SRCS = $(wildcard $(SRC_DIR)/*.c)
+TARGETS = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.x, $(SRCS))
 
 all: $(BUILD_DIR) $(TARGETS)
 

@@ -1,6 +1,6 @@
 #!/bin/bash
-export TEVFS_WORKSPACE=$(dirname "$0")
-cd $TEVFS_WORKSPACE
+
+cd $(dirname "$0")
 
 # allocate the inode first without unmount
 echo -e "=== running ialloc.sh ==="
@@ -8,7 +8,7 @@ echo -e "=== running ialloc.sh ==="
 ret=$?
 if [[ $ret != 0 ]]; then
      source ./img-var.sh
-     sudo -E ./img-umount.sh
+     sudo -E ./img-unmount.sh
 fi
 echo -e "\n=== ialloc.sh exit $ret ==="
 
@@ -27,7 +27,7 @@ echo -e "\nrunning build/ifree.x $inode_num $TEVFS_MOUNTPT"
 build/ifree.x $inode_num $TEVFS_MOUNTPT
 echo "exit code: $?"
 
-if ! sudo -E ./img-umount.sh; then
+if ! sudo -E ./img-unmount.sh; then
     exit 1
 fi
 
@@ -44,4 +44,3 @@ else
     echo -e Failed
 fi
 
-# rm $TEVFS_IMAGEPATH

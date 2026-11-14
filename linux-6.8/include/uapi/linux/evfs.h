@@ -37,11 +37,6 @@ struct evfs_ino_read_args
 
 typedef struct evfs_ino_read_out evfs_stat;
 
-#endif
-
-#ifndef _EXT4_EVFS
-#define _EXT4_EVFS
-
 #ifndef EXT4_NAME_LEN
 #define EXT4_NAME_LEN 255
 #endif
@@ -144,19 +139,42 @@ struct ext4_evfs_ext_mv_args
 	
 };
 
-#define EXT4_EVFS_HELLO _IO('f', 99)
-#define EXT4_EVFS_IVER _IOR('f', 100, unsigned long long)
+struct f2fs_evfs_ext_alloc_args
+{
+	struct {
+		unsigned int start;
+		unsigned int len;
+	} in;
+	struct  {
+		unsigned int start;
+		unsigned int len;
+	} out;
+};
+
+
+#define EXT4_EVFS_HELLO _IO('f', 100)
 #define EXT4_EVFS_BLK_ALLOC _IO('f', 101)
 #define EXT4_EVFS_BLK_FREE _IO('f', 102)
 #define EXT4_EVFS_INO_ALLOC _IO('f', 103)
 #define EXT4_EVFS_INO_FREE _IO('f', 104)
-#define EXT4_EVFS_INO_READ _IOWR('f', 105, struct evfs_ino_read_args)
-#define EXT4_EVFS_DEN_ADD _IOW('f', 106, struct ext4_evfs_de_add_args)
-#define EXT4_EVFS_DEN_READ _IOWR('f', 107, struct ext4_evfs_de_read_args)
-#define EXT4_EVFS_DEN_DELETE _IOW('f', 108, struct ext4_evfs_de_delete_args)
-#define EXT4_EVFS_DEN_UPDATE _IOW('f', 109, struct ext4_evfs_de_update_args)
-#define EXT4_EVFS_EXT_READ _IOWR('f', 110, struct ext4_evfs_ext_read_args)
-#define EXT4_EVFS_EXT_MV _IOWR('f', 111, struct ext4_evfs_ext_mv_args)
+
+#define EXT4_EVFS_IVER _IOR('f', 100, unsigned long long)
+
+#define EXT4_EVFS_DEN_ADD _IOW('f', 100, struct ext4_evfs_de_add_args)
+#define EXT4_EVFS_DEN_DELETE _IOW('f', 101, struct ext4_evfs_de_delete_args)
+#define EXT4_EVFS_DEN_UPDATE _IOW('f', 102, struct ext4_evfs_de_update_args)
+
+#define EXT4_EVFS_FSP_ITER _IOWR('f', 100, struct ext4_evfs_fsp_iter_args)
+#define EXT4_EVFS_INO_READ _IOWR('f', 101, struct evfs_ino_read_args)
+#define EXT4_EVFS_INO_ITER _IOWR('f', 102, struct ext4_evfs_ino_iter_args)
+#define EXT4_EVFS_DEN_READ _IOWR('f', 103, struct ext4_evfs_de_read_args)
+#define EXT4_EVFS_EXT_READ _IOWR('f', 104, struct ext4_evfs_ext_read_args)
+#define EXT4_EVFS_EXT_MV _IOWR('f', 105, struct ext4_evfs_ext_mv_args)
+
+
+#define F2FS_EVFS_HELLO _IO('f', 120)
+
+#define F2FS_EVFS_EXT_ALLOC _IOW('f', 120, struct f2fs_evfs_ext_alloc_args)
 
 #endif
 

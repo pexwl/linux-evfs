@@ -48,7 +48,6 @@ int main(int argc, char * argv[]) {
 	get_time((time_t) stat->est_mtime, tlen, mtime);
 	get_time((time_t) stat->est_ctime, tlen, ctime);
 
-	printf("File: %s\n", pathname);
 	printf("Size: %ld\tBlocks: %d\tMode: %o\tUID, GID: %u, %u\n",
 		stat->est_size, stat->est_blksize, stat->est_mode, stat->est_uid, stat->est_gid);
 	printf("Dev, Root Dev: %lu, %lu\tInode #: %lu\tLinks: %u\n",

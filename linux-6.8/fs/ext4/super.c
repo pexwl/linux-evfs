@@ -57,6 +57,11 @@
 #include "mballoc.h"
 #include "fsmap.h"
 
+#ifdef CONFIG_FS_EVFS
+#include <linux/evfs.h>
+#include "evfs.h"
+#endif
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/ext4.h>
 
@@ -1295,6 +1300,13 @@ static void ext4_put_super(struct super_block *sb)
 	int aborted = 0;
 	int err;
 
+#ifdef CONFIG_FS_EVFS
+	/* evfs: inode tracker: must be before journal and orphan list cleanup */
+    evfs_tino_tracker_final(&(sbi->s_inode_tracker));
+	/* evfs: block tracker */
+    evfs_tblk_tracker_final(&(sbi->s_block_tracker));
+#endif
+
 	/*
 	 * Unregister sysfs before destroying jbd2 journal.
 	 * Since we could still access attr_journal_task attribute via sysfs
@@ -1349,6 +1361,7 @@ static void ext4_put_super(struct super_block *sb)
 		kfree(get_qf_name(sb, sbi, i));
 #endif
 
+
 	/* Debugging code just in case the in-memory inode orphan list
 	 * isn't empty.  The on-disk one can be non-empty if we've
 	 * detected an error and taken the fs readonly, but the
@@ -1374,11 +1387,6 @@ static void ext4_put_super(struct super_block *sb)
 
 	ext4_xattr_destroy_cache(sbi->s_ea_block_cache);
 	sbi->s_ea_block_cache = NULL;
-
-	/* evfs: inode tracker */
-	if (evfs_bm_tracker_final(sbi->s_inode_tracker) < 0) {
-		ext4_msg(sb, KERN_WARNING, "ext4 >> unmounting >> evfs inode tracker freeing failed");
-	}
 
 	ext4_stop_mmpd(sbi);
 
@@ -5601,13 +5609,13 @@ static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb)
 			goto failed_mount10;
 	}
 
-	/* evfs: inode tracker */
-	printk(KERN_INFO "ext4 >> mount >> evfs >> inode count check: %u\n", es->s_inodes_count);
-	if (evfs_bm_tracker_init(&(sbi->s_inode_tracker), (size_t) es->s_inodes_count) < 0) {
-		ext4_msg(sb, KERN_WARNING, "mounting with evfs inode tracking failed, evfs functions\
-				can fail on this device");
-		sbi->s_inode_tracker = NULL;
+#ifdef CONFIG_FS_EVFS
+	evfs_tino_tracker_init(&(sbi->s_inode_tracker));
+	if (evfs_tblk_tracker_init(sb, ext4_evfs_inode_alloc_gbl,
+            &(sbi->s_block_tracker)) < 0) {
+	    ext4_msg(sb, KERN_WARNING, "mounting with evfs block tracking failed, evfs functions can fail on this device");	
 	}
+#endif
 
 	if (test_opt(sb, DISCARD) && !bdev_max_discard_sectors(sb->s_bdev))
 		ext4_msg(sb, KERN_WARNING,

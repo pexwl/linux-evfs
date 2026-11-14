@@ -1,16 +1,13 @@
 #!/bin/bash
-export TEVFS_WORKSPACE=$(dirname "$0")
-cd $TEVFS_WORKSPACE
+
+cd $(dirname "$0")
 
 # allocate the inode first without unmount
 echo -e "=== running balloc.sh ==="
 ./balloc.sh --no-unmount
 echo -e "\n=== balloc.sh exit $? ==="
 
-# exit 0
-read -p "Press enter to continue"
-source ./img-var.sh
-
+source img-var.sh
 block_num=2048
 
 rm build/bfree.x
@@ -20,7 +17,7 @@ echo -e "running build/bfree.x $block_num $TEVFS_MOUNTPT\n"
 build/bfree.x $block_num $TEVFS_MOUNTPT
 echo "exit code: $?"
 
-if ! sudo -E ./img-umount.sh; then
+if ! sudo -E ./img-unmount.sh; then
     exit 1
 fi
 
@@ -37,4 +34,3 @@ else
     echo -e Failed
 fi
 
-# rm $TEVFS_IMAGEPATH

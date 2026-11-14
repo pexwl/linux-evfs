@@ -6,9 +6,6 @@ if (($EUID != 0)); then
     exit 1
 fi
 
-if [[ ! -v TEVFS_WORKSPACE ]]; then
-    echo "workspace check fail"
-    exit 1
-fi
+umount $TEVFS_MOUNTPT
+losetup -d /dev/loop0
 
-umount $TEVFS_IMAGEPATH

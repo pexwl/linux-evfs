@@ -1,4 +1,5 @@
 export TEVFS_SIZE="16M"
+export TEVFS_BLOCK_SIZE="1024"
 export TEVFS_NUM_INODES="120"
 export TEVFS_IMAGEPATH="/tmp/ext4-$TEVFS_SIZE-$TEVFS_NUM_INODES.img"
 export TEVFS_MOUNTPT="/tmp/a"

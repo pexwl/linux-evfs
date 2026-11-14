@@ -1,14 +1,12 @@
 #!/bin/bash
 
-export TEVFS_WORKSPACE=$(dirname "$0")
-cd $TEVFS_WORKSPACE
+cd $(dirname "$0")
 
 source img-var.sh
 
 echo "$TEVFS_SIZE $TEVFS_NUM_INODES $TEVFS_IMAGEPATH $TEVFS_MOUNTPT"
 rm -f $TEVFS_IMAGEPATH
 
-truncate -s $TEVFS_SIZE $TEVFS_IMAGEPATH
 
 if ! sudo -E ./img-mkfs.sh; then
     exit 1
@@ -41,7 +39,7 @@ echo -e "\nrunning build/dentry_delete.x $pino_num $fname $TEVFS_MOUNTPT"
 build/dentry_delete.x $pino_num $fname $TEVFS_MOUNTPT
 echo "exit code: $?"
 
-if ! sudo -E ./img-umount.sh; then
+if ! sudo -E ./img-unmount.sh; then
     exit 1
 fi
 

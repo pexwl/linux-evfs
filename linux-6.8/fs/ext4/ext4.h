@@ -46,8 +46,9 @@
 #include <linux/fsverity.h>
 #include <linux/compiler.h>
 
-#include "evfs-bmt.h"
-#include "evfs-dent.h"
+#ifdef CONFIG_FS_EVFS
+#include <linux/evfs.h>
+#endif
 
 /*
  * The fourth extended filesystem constants/structures
@@ -1756,8 +1757,11 @@ struct ext4_sb_info {
 #endif
 	struct ext4_fc_replay_state s_fc_replay_state;
 
-	/* evfs: inode tracker */
-	struct evfs_bm_tracker * s_inode_tracker;
+#ifdef CONFIG_FS_EVFS
+	/* evfs: inode and block tracker */
+	struct evfs_tino_tracker s_inode_tracker;
+	struct evfs_tblk_tracker s_block_tracker;
+#endif
 };
 
 static inline struct ext4_sb_info *EXT4_SB(struct super_block *sb)
@@ -2889,6 +2893,13 @@ extern void ext4_end_bitmap_read(struct buffer_head *bh, int uptodate);
 extern struct buffer_head *
 ext4_read_inode_bitmap(struct super_block *sb, ext4_group_t block_group);
 
+extern int ext4_xattr_credits_for_new_inode(struct inode *dir, mode_t mode, 
+					bool encrypt);
+
+// evfs: ialloc_gbl
+int find_inode_bit(struct super_block *sb, ext4_group_t group,
+			  struct buffer_head *bitmap, unsigned long *ino);
+
 // evfs: dentry update  
 extern struct buffer_head *
 ext4_find_entry(struct inode *dir, const struct qstr *d_name,
@@ -2899,6 +2910,9 @@ struct ext4_ext_path;
 struct ext4_extent;
 
 /* evfs: extent move begins */
+extern int ext4_ext_get_access(handle_t *handle, struct inode *inode,
+				struct ext4_ext_path *path);
+
 extern int __ext4_ext_dirty(const char *where, unsigned int line,
 			    handle_t *handle, struct inode *inode,
 			    struct ext4_ext_path *path);
